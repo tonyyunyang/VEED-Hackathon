@@ -1,4 +1,30 @@
 .venv
 .env
+# It is best to ignoring editor and system files in a local .gitignore configuration file.
+# However, in order to prevent issues, they are ignored here.
+.DS_Store
 .idea
 .claude
+# IntelliJ IDEA module file
+*.iml
+.vscode/*
+!.vscode/launch.json
+*.log
+build
+node_modules
+package-lock.json
+src/.DS_Store
+dist
+__pycache__
+
+# Environment files
+.env
+.env.local
+.env.*
+!.env.example
+server/.env
+server/venv
+
+*.af
+# Temporary Scratch Files
+scripts/temp/
