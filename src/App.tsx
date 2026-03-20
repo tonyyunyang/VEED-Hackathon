@@ -2,8 +2,10 @@ import { BrowserRouter, Route, Routes } from "react-router-dom";
 import "./App.css";
 import "./index.css";
 
+import { VideoPlayer } from "./components/VideoPlayer";
+
 function Home() {
-  return <div>Home </div>;
+  return <VideoPlayer />;
 }
 
 function App() {
