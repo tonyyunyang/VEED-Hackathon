@@ -1,0 +1,30 @@
+[project]
+name = "veed-agent-coordinator"
+version = "0.1.0"
+description = "AI wrapper to coordinate multiple agents"
+requires-python = ">=3.11"
+
+dependencies = [
+    "anthropic>=0.52.0",
+    "openai>=1.82.0",
+    "pydantic>=2.11.0",
+    "httpx>=0.28.0",
+    "python-dotenv>=1.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.11.0",
+]
+
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
