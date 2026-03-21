@@ -118,7 +118,7 @@ async def _run_swap_job(job_id: str, video_id: str, face_ids: list[str]):
             adapter = face_swapper.InsightFaceSwapAdapter()
             await asyncio.get_event_loop().run_in_executor(
                 None,
-                face_swapper.swap_faces_in_video,
+                face_swapper.swap_faces_pipeline,
                 frames_dir,
                 swapped_dir,
                 faces_json,
