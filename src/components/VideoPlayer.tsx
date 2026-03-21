@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState } from "react";
+import videoData from "../assets/insightface_video_data.json";
 import { Button } from "./ui/button";
 import { Slider } from "./ui/slider";
 import { Toolbar, ToolbarGroup } from "./ui/toolbar";
@@ -10,6 +11,19 @@ import {
   TooltipProvider,
 } from "./ui/tooltip";
 import { Play, Pause, Scissors, Check, X } from "lucide-react";
+
+const PERSON_COLORS = [
+  "#00FF00", // Bright Green
+  "#FF00FF", // Magenta
+  "#00FFFF", // Cyan
+  "#FFFF00", // Yellow
+  "#FF4500", // OrangeRed
+  "#ADFF2F", // GreenYellow
+];
+
+const getPersonColor = (id: number) => {
+  return PERSON_COLORS[id % PERSON_COLORS.length];
+};
 
 interface VideoPlayerProps {
   videoSrc: string;
@@ -74,6 +88,39 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           ctx.clearRect(0, 0, cw, ch);
           ctx.drawImage(video, dx, dy, drawWidth, drawHeight);
+
+          // DRAW BOUNDING BOXES
+          const fps = videoData.video_metadata.fps;
+          const origW = videoData.video_metadata.width;
+          const currentFrame = Math.floor(video.currentTime * fps);
+          const frameData = (videoData.frames as any)[currentFrame.toString()];
+
+          if (frameData) {
+            const scale = drawWidth / origW;
+
+            frameData.forEach((person: any) => {
+              const [x1, y1, x2, y2] = person.bbox;
+              const color = getPersonColor(person.id);
+
+              ctx.strokeStyle = color;
+              ctx.lineWidth = 3;
+              ctx.strokeRect(
+                dx + x1 * scale,
+                dy + y1 * scale,
+                (x2 - x1) * scale,
+                (y2 - y1) * scale,
+              );
+
+              // Draw Label
+              ctx.fillStyle = color;
+              ctx.font = "bold 16px Inter, sans-serif";
+              ctx.fillText(
+                `${person.label} (${person.id})`,
+                dx + x1 * scale,
+                dy + y1 * scale - 10,
+              );
+            });
+          }
         }
       }
       requestAnimationFrame(renderFrame);
@@ -281,7 +328,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             <div className="flex items-center justify-between w-full px-4">
               <ToolbarGroup className="flex items-center gap-2">
                 {onBack && (
-                  <Button variant="ghost" size="sm" onClick={onBack} className="mr-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={onBack}
+                    className="mr-2"
+                  >
                     Back
                   </Button>
                 )}
