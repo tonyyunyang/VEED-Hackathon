@@ -1,16 +1,21 @@
 import os
 import json
 import base64
+import random
 from collections import defaultdict
 
 import cv2
 import numpy as np
-from insightface.app import FaceAnalysis
 
-_app: FaceAnalysis | None = None
+from config import DUMMY_TRACKING
+
+if not DUMMY_TRACKING:
+    from insightface.app import FaceAnalysis
+
+_app = None
 
 
-def _get_app() -> FaceAnalysis:
+def _get_app():
     global _app
     if _app is None:
         _app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
@@ -36,9 +41,68 @@ def _crop_face_thumbnail(frame: np.ndarray, bbox: list[float], size: int = 112) 
     return f"data:image/jpeg;base64,{b64}"
 
 
+def _dummy_detect_and_cluster(
+    frames_dir: str, storage_dir: str, subsample: int = 5
+) -> dict:
+    """Return 3 random square bounding boxes as fake faces for frontend dev."""
+    frame_files = sorted(
+        f for f in os.listdir(frames_dir) if f.startswith("frame_") and f.endswith(".jpg")
+    )
+    if not frame_files:
+        return {"faces": {}}
+
+    # Read first frame to get dimensions
+    sample = cv2.imread(os.path.join(frames_dir, frame_files[0]))
+    if sample is None:
+        return {"faces": {}}
+    h, w = sample.shape[:2]
+
+    rng = random.Random(42)  # deterministic so reloads are stable
+    face_size = min(h, w) // 5  # square side length
+
+    faces_data = {}
+    for idx in range(3):
+        face_id = f"face_{idx}"
+        # Pick a random position that fits within the frame
+        x1 = rng.randint(0, max(0, w - face_size))
+        y1 = rng.randint(0, max(0, h - face_size))
+        x2 = x1 + face_size
+        y2 = y1 + face_size
+        bbox = [float(x1), float(y1), float(x2), float(y2)]
+
+        # Build frames dict — assign this box to every subsampled frame
+        frames_dict = {}
+        for i, fname in enumerate(frame_files):
+            if i % subsample != 0:
+                continue
+            frames_dict[str(i)] = bbox
+
+        # Thumbnail from the first frame
+        thumbnail = _crop_face_thumbnail(sample, bbox)
+        thumb_path = f"{face_id}_thumb.jpg"
+        crop = sample[y1:y2, x1:x2]
+        if crop.size > 0:
+            cv2.imwrite(os.path.join(storage_dir, thumb_path), crop)
+
+        faces_data[face_id] = {
+            "age": rng.randint(20, 45),
+            "gender": rng.choice(["male", "female"]),
+            "thumbnail": thumbnail,
+            "thumbnail_path": thumb_path,
+            "embedding": [0.0] * 512,
+            "frames": frames_dict,
+            "frame_count": len(frames_dict),
+        }
+
+    return {"faces": faces_data}
+
+
 def detect_and_cluster(
     frames_dir: str, storage_dir: str, subsample: int = 5
 ) -> dict:
+    if DUMMY_TRACKING:
+        return _dummy_detect_and_cluster(frames_dir, storage_dir, subsample)
+
     app = _get_app()
     frame_files = sorted(
         f for f in os.listdir(frames_dir) if f.startswith("frame_") and f.endswith(".jpg")

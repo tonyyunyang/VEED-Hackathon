@@ -8,3 +8,4 @@ ENABLE_LIPSYNC = os.getenv("ENABLE_LIPSYNC", "false").lower() == "true"
 FAL_KEY = os.getenv("FAL_KEY", "")
 LIPSYNC_RESOLUTION = os.getenv("LIPSYNC_RESOLUTION", "480p")
 FRAME_SUBSAMPLE = int(os.getenv("FRAME_SUBSAMPLE", "5"))
+DUMMY_TRACKING = os.getenv("DUMMY_TRACKING", "true").lower() == "true"
