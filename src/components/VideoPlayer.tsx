@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
+import { Slider as SliderPrimitive } from "@base-ui/react/slider";
 import videoData from "../assets/insightface_video_data.json";
 import { Button } from "./ui/button";
 import { Slider } from "./ui/slider";
@@ -10,7 +11,14 @@ import {
   TooltipPopup,
   TooltipProvider,
 } from "./ui/tooltip";
-import { Play, Pause, Scissors, Check, ScanFace } from "lucide-react";
+import {
+  Play,
+  Pause,
+  Scissors,
+  Check,
+  ScanFace,
+  SmilePlus,
+} from "lucide-react";
 
 /**
  * Generates a set of colors with high contrast between them and at least 4.6:1 contrast against black.
@@ -129,6 +137,58 @@ const drawPersonOverlay = (
   ctx.fillStyle = color;
   ctx.font = "bold 16px Inter, sans-serif";
   ctx.fillText(`${person.label} (${person.id})`, bx, by - 10);
+};
+
+/**
+ * Custom Range Selector with Bracket Handles
+ */
+const RangeBracketSelector = ({
+  value,
+  max,
+  onChange,
+}: {
+  value: [number, number];
+  max: number;
+  onChange: (val: [number, number]) => void;
+}) => {
+  return (
+    <SliderPrimitive.Root
+      value={value}
+      onValueChange={(val) => onChange(val as [number, number])}
+      max={max}
+      min={0}
+      step={0.1}
+      thumbAlignment="center"
+      className="relative w-full h-full flex items-center"
+    >
+      <SliderPrimitive.Control className="relative w-full h-full flex items-center">
+        <SliderPrimitive.Track className="relative w-full h-full">
+          {/* Selected Range Highlight */}
+          <SliderPrimitive.Indicator className="slider-indicator absolute h-full bg-primary/10 border-y-2 border-primary/50 z-10" />
+
+          {/* Left Bracket */}
+          <SliderPrimitive.Thumb
+            index={0}
+            className="slider-thumb-frame absolute top-0 bottom-0 w-4 flex items-center justify-center cursor-ew-resize z-30 outline-none group"
+          >
+            <div className="slider-thumb__left w-full h-full border-l-4 border-y-4 border-primary rounded-l-md transition-all duration-200" />
+            {/* Grab handle dots */}
+            <div className="absolute left-1.5 w-0.5 h-4" />
+          </SliderPrimitive.Thumb>
+
+          {/* Right Bracket */}
+          <SliderPrimitive.Thumb
+            index={1}
+            className="absolute top-0 bottom-0 w-4 flex items-center justify-center cursor-ew-resize z-30 outline-none group"
+          >
+            <div className="slider-thumb__right w-full h-full border-r-4 border-y-4 border-primary rounded-r-md bg-primary/20 group-hover:bg-primary/40 transition-all duration-200" />
+            {/* Grab handle dots */}
+            <div className="absolute right-1.5 w-0.5 h-4 bg-primary/60 rounded-full" />
+          </SliderPrimitive.Thumb>
+        </SliderPrimitive.Track>
+      </SliderPrimitive.Control>
+    </SliderPrimitive.Root>
+  );
 };
 
 interface VideoPlayerProps {
@@ -364,6 +424,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => window.removeEventListener("resize", updateSize);
   }, []);
 
+  const handleFaceSwap = () => {
+    const exportData = {
+      video_metadata: videoData.video_metadata,
+      frames: Object.entries(videoData.frames).reduce(
+        (acc: any, [frameIdx, people]) => {
+          const filteredPeople = (people as any[]).filter((p) =>
+            selectedPersonIds.includes(p.id),
+          );
+
+          if (filteredPeople.length > 0) {
+            acc[frameIdx] = filteredPeople;
+          }
+          return acc;
+        },
+        {},
+      ),
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "selected_faces.json";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
   // Handle video metadata
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
@@ -563,16 +653,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   ))}
 
                   {/* Range Selection Overlay */}
-                  <div className="absolute inset-x-3 inset-y-0 flex items-center">
-                    <Slider
-                      min={0}
+                  <div className="absolute inset-0 flex items-center">
+                    <RangeBracketSelector
                       max={duration}
-                      step={0.1}
                       value={tempSelection}
-                      onValueChange={(val) =>
-                        setTempSelection(val as [number, number])
-                      }
-                      className="w-full z-10"
+                      onChange={(val) => setTempSelection(val)}
                     />
                   </div>
                 </div>
@@ -793,6 +878,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         }
                       />
                       <TooltipPopup>Control Faces</TooltipPopup>
+                    </Tooltip>
+
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="sm"
+                            onClick={handleFaceSwap}
+                            className="h-9 px-4 font-semibold shadow-sm hover:shadow-md transition-all active:scale-95"
+                          >
+                            <SmilePlus className="w-4 h-4 mr-2" />
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup>Swap Faces</TooltipPopup>
                     </Tooltip>
                   </ToolbarGroup>
                 </div>

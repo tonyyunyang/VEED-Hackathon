@@ -68,7 +68,7 @@ function App() {
     <div className="w-full min-h-screen bg-background font-sans flex flex-col items-center p-8">
       {step !== "player" && (
         <h1 className="text-4xl font-black mb-12 tracking-tight bg-gradient-to-r from-primary to-purple-600 bg-clip-text text-transparent">
-          VEED CREATE
+          VEED Face Swapper
         </h1>
       )}
 
