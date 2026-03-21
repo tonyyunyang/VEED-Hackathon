@@ -2,6 +2,12 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+@layer utilities {
+  .perspective-2000 {
+    perspective: 2000px;
+  }
+}
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {

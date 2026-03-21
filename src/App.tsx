@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Routes, Route, useNavigate, useParams } from "react-router-dom";
+import { Routes, Route, useNavigate, useParams, useLocation } from "react-router-dom";
+import { AnimatePresence, motion } from "framer-motion";
 import "./App.css";
 import "./index.css";
 import type { GalleryVideo } from "./types";
@@ -41,24 +42,36 @@ function VideoDetail({ allVideos }: { allVideos: GalleryVideo[] }) {
 
   if (!video) {
     return (
-      <div className="flex flex-col items-center gap-4 mt-20">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        exit={{ opacity: 0, y: -20 }}
+        className="flex flex-col items-center gap-4 mt-20"
+      >
         <p className="text-xl font-bold">Video not found</p>
         <button onClick={() => navigate("/")} className="text-primary hover:underline">
           Go back to Gallery
         </button>
-      </div>
+      </motion.div>
     );
   }
 
   return (
-    <div className="w-full h-screen fixed inset-0 z-50">
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 1.05 }}
+      transition={{ duration: 0.4, ease: "easeOut" }}
+      className="w-full h-screen fixed inset-0 z-50 bg-black"
+    >
       <VideoPlayer videoSrc={video.url} onBack={() => navigate("/")} />
-    </div>
+    </motion.div>
   );
 }
 
 function App() {
   const navigate = useNavigate();
+  const location = useLocation();
   const [allVideos, setAllVideos] = useState<GalleryVideo[]>(initialVideos);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,14 +80,11 @@ function App() {
     setIsUploading(true);
     setError(null);
     try {
-      // Step 1: Upload to server to get videoId (the underlying resource ID)
       await uploadVideo(file);
-
-      // Step 2: Create a local preview
       const url = URL.createObjectURL(file);
       const name = file.name.replace(/\.[^/.]+$/, "");
       const baseId = slugify(name);
-      const id = `user-${baseId}-${Date.now()}`; // Keep user prefix and timestamp for uniqueness
+      const id = `user-${baseId}-${Date.now()}`;
       
       const newVideo: GalleryVideo = {
         id,
@@ -85,7 +95,7 @@ function App() {
       };
 
       setAllVideos(prev => [newVideo, ...prev]);
-      navigate("/"); // Ensure we are on gallery
+      navigate("/");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Upload failed");
     } finally {
@@ -94,44 +104,52 @@ function App() {
   };
 
   return (
-    <div className="w-full min-h-screen bg-background font-sans flex flex-col items-center p-8">
-      <Routes>
-        <Route
-          path="/"
-          element={
-            <>
-              <h1 className="text-4xl font-black mb-12 tracking-tight bg-gradient-to-r from-primary to-purple-600 bg-clip-text text-transparent">
-                VEED Face Swapper
-              </h1>
+    <div className="w-full min-h-screen bg-background font-sans flex flex-col items-center overflow-x-hidden">
+      <AnimatePresence mode="wait">
+        <Routes location={location} key={location.pathname}>
+          <Route
+            path="/"
+            element={
+              <motion.div
+                initial={{ opacity: 0, y: 30 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -30 }}
+                transition={{ duration: 0.5, ease: "circOut" }}
+                className="w-full flex flex-col items-center p-8"
+              >
+                <h1 className="text-5xl font-black mb-16 tracking-tighter bg-gradient-to-br from-foreground to-muted-foreground bg-clip-text text-transparent">
+                  VEED Studio
+                </h1>
 
-              {error && (
-                <div className="mb-6 p-4 bg-destructive/10 text-destructive rounded-xl text-sm max-w-lg w-full text-center">
-                  {error}
-                </div>
-              )}
-
-              {isUploading && (
-                <div className="fixed inset-0 bg-background/80 backdrop-blur-sm z-[100] flex items-center justify-center">
-                  <div className="flex flex-col items-center gap-4">
-                    <Loader2 className="w-10 h-10 animate-spin text-primary" />
-                    <p className="text-lg font-medium">Uploading video...</p>
+                {error && (
+                  <div className="mb-6 p-4 bg-destructive/10 text-destructive rounded-2xl text-sm max-w-lg w-full text-center border border-destructive/20 backdrop-blur-md">
+                    {error}
                   </div>
-                </div>
-              )}
+                )}
 
-              <Gallery
-                videos={allVideos}
-                onSelect={(url) => {
-                  const v = allVideos.find((v) => v.url === url);
-                  if (v) navigate(`/video/${v.id}`);
-                }}
-                onUpload={handleUpload}
-              />
-            </>
-          }
-        />
-        <Route path="/video/:videoId" element={<VideoDetail allVideos={allVideos} />} />
-      </Routes>
+                {isUploading && (
+                  <div className="fixed inset-0 bg-background/40 backdrop-blur-xl z-[100] flex items-center justify-center">
+                    <div className="flex flex-col items-center gap-4 p-8 rounded-3xl bg-card border shadow-2xl scale-110">
+                      <Loader2 className="w-12 h-12 animate-spin text-primary" />
+                      <p className="text-xl font-bold tracking-tight">Processing Masterpiece</p>
+                    </div>
+                  </div>
+                )}
+
+                <Gallery
+                  videos={allVideos}
+                  onSelect={(url) => {
+                    const v = allVideos.find((v) => v.url === url);
+                    if (v) navigate(`/video/${v.id}`);
+                  }}
+                  onUpload={handleUpload}
+                />
+              </motion.div>
+            }
+          />
+          <Route path="/video/:videoId" element={<VideoDetail allVideos={allVideos} />} />
+        </Routes>
+      </AnimatePresence>
     </div>
   );
 }
