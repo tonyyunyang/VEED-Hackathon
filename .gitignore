@@ -30,7 +30,6 @@ server/test_swap_output
 .conda-pkgs/
 .uv-cache/
 .tmp-tracker-smoke/
-face-detect-track/
 
 *.af
 # Temporary Scratch Files

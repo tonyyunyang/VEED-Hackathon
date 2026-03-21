@@ -1,0 +1,3 @@
+[submodule "face-detect-track"]
+	path = face-detect-track
+	url = git@github.com-tony:tonyyunyang/face-detect-track.git
