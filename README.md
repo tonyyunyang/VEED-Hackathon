@@ -16,12 +16,30 @@ A video editing tool that detects faces in short clips (~10s), lets users select
 |----------------|--------------------------------------------------------------|
 | Frontend       | React 19 + TypeScript + Vite + Tailwind 4 + shadcn           |
 | Backend        | Python, FastAPI + Uvicorn                                    |
-| Face Detection | InsightFace (ArcFace for detection, recognition, age/gender) |
+| Face Tracking  | `movie-like-shots` via `face-detect-track` submodule         |
+| Face Detection | InsightFace (recognition, age/gender enrichment)             |
 | Face Swap      | Pluggable adapter (default: InsightFace inswapper)           |
 | Lipsync        | VEED Fabric 1.0 via fal.ai (optional, config-driven)         |
 | Video I/O      | FFmpeg                                                       |
 
 ## Setup
+
+### Clone
+
+Clone recursively so Git also pulls:
+- the `face-detect-track` submodule
+- the nested tracker/detector repos inside it
+
+```bash
+git clone --recurse-submodules git@github.com:tonyyunyang/VEED-Hackathon.git
+cd VEED-Hackathon
+```
+
+If you already cloned the repo without submodules:
+
+```bash
+git submodule update --init --recursive
+```
 
 ### Prerequisites
 
@@ -29,14 +47,22 @@ A video editing tool that detects faces in short clips (~10s), lets users select
 brew install ffmpeg
 ```
 
+`ffmpeg` and `ffprobe` must be on your `PATH` for video extraction, reassembly, and the FFmpeg-backed tests.
+
 ### Backend
 
 ```bash
+conda create -n veed-face-swap python=3.11 -y
+conda activate veed-face-swap
 cd server
-python -m venv venv
-source venv/bin/activate
-uv sync
+uv sync --python "$(which python)" --all-groups
+cd ..
 ```
+
+Notes:
+- `uv` resolves the local `movie-like-shots` dependency from `face-detect-track/`
+- the synced backend environment lives under `server/.venv`
+- the default tracker backend is `movie_like_shots` with `ocsort`
 
 ### Frontend
 
@@ -51,7 +77,10 @@ Copy `.env.example` to `.env` and fill in:
 ```
 FAL_KEY=your_fal_api_key
 ENABLE_LIPSYNC=false
+DUMMY_TRACKING=false
 ```
+
+The tracker-related defaults in `.env.example` are already set to use the merged `movie_like_shots` pipeline.
 
 ## Running
 
@@ -64,6 +93,29 @@ npm run dev
 ```
 
 Frontend runs on `http://localhost:5173`, backend on `http://localhost:8000`.
+
+You can also run the backend directly without the npm wrapper:
+
+```bash
+cd server
+uv run uvicorn main:app --port 8000
+```
+
+## Testing
+
+Backend tests:
+
+```bash
+server/.venv/bin/pytest tests/test_face_tracker.py tests/test_api.py tests/test_schemas.py
+```
+
+Full Python suite:
+
+```bash
+server/.venv/bin/pytest tests
+```
+
+The FFmpeg-backed video service tests in `tests/test_video_service.py` are skipped automatically when `ffmpeg` or `ffprobe` are not installed.
 
 ## Team Workstreams
 

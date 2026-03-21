@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "server": "export $(grep -v '^#' .env | xargs) && cd server && source venv/bin/activate && uvicorn main:app --port 8000",
+    "server": "export $(grep -v '^#' .env | xargs) && cd server && uv run uvicorn main:app --port 8000",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview"
