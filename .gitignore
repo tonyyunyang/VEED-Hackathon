@@ -29,6 +29,7 @@ server/test_swap_output
 .conda-envs/
 .conda-pkgs/
 .uv-cache/
+.tmp-npm-cache/
 .tmp-tracker-smoke/
 
 *.af
