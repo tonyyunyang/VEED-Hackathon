@@ -15,19 +15,20 @@
 }
 
 .slider-indicator {
-  border: 5px solid rgb(255, 165, 0);
+  border: 5px solid rgb(167, 255, 124);
   border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(122, 87, 255, 0.2);
 }
 .slider-thumb {
   border-radius: 20px;
 }
 
 .slider-thumb__right {
-  border: 3px solid rgb(255, 165, 0);
+  border: 3px solid rgb(167, 255, 124);
   margin-left: 3px;
 }
 
 .slider-thumb__left {
-  border: 3px solid rgb(255, 165, 0);
+  border: 3px solid rgb(167, 255, 124);
   margin-right: 3px;
 }

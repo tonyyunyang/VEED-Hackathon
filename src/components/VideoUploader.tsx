@@ -3,7 +3,7 @@ import { Upload } from "lucide-react";
 import { VideoPreview } from "./VideoPreview";
 
 interface VideoUploaderProps {
-  onUpload: (file: File) => void;
+  onUpload: (file: File) => Promise<void> | void;
   isUploading: boolean;
 }
 
@@ -11,6 +11,7 @@ export function VideoUploader({ onUpload, isUploading }: VideoUploaderProps) {
   const [dragOver, setDragOver] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isStartingUpload, setIsStartingUpload] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -42,6 +43,18 @@ export function VideoUploader({ onUpload, isUploading }: VideoUploaderProps) {
     [handleFile]
   );
 
+  const handleUploadClick = async () => {
+    if (!selectedFile || isUploading || isStartingUpload) return;
+    setIsStartingUpload(true);
+    try {
+      await onUpload(selectedFile);
+    } finally {
+      setIsStartingUpload(false);
+    }
+  };
+
+  const uploadDisabled = isUploading || isStartingUpload;
+
   if (selectedFile && previewUrl) {
     return (
       <div className="flex flex-col items-center gap-4 w-full max-w-lg">
@@ -52,15 +65,15 @@ export function VideoUploader({ onUpload, isUploading }: VideoUploaderProps) {
         </p>
         <button
           className="w-full py-3 px-6 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
-          onClick={() => onUpload(selectedFile)}
-          disabled={isUploading}
+          onClick={handleUploadClick}
+          disabled={uploadDisabled}
         >
-          {isUploading ? "Uploading..." : "Upload & Analyze"}
+          {uploadDisabled ? "Uploading..." : "Upload & Analyze"}
         </button>
         <button
           className="text-sm text-muted-foreground hover:text-foreground transition-colors"
           onClick={() => setSelectedFile(null)}
-          disabled={isUploading}
+          disabled={uploadDisabled}
         >
           Change video
         </button>
