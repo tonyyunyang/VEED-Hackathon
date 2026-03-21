@@ -16,6 +16,7 @@ dependencies = [
     "numpy>=1.26.0",
     "python-multipart>=0.0.9",
     "fal-client>=0.5.0",
+    "movie-like-shots>=0.1.0",
 ]
 
 [dependency-groups]
@@ -34,3 +35,6 @@ select = ["E", "F", "I", "N", "W"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.uv.sources]
+movie-like-shots = { path = "../face-detect-track", editable = true }

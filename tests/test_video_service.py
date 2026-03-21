@@ -13,6 +13,11 @@ from services.video import extract_frames, extract_audio, reassemble_video, get_
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 TEST_VIDEO = os.path.join(FIXTURES, "test_video.mp4")
+FFMPEG_AVAILABLE = shutil.which("ffmpeg") and shutil.which("ffprobe")
+pytestmark = pytest.mark.skipif(
+    not FFMPEG_AVAILABLE,
+    reason="ffmpeg/ffprobe not installed",
+)
 
 
 @pytest.fixture

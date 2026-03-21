@@ -1,8 +1,11 @@
-import os
-import json
 import base64
+import json
+import os
 import random
-from collections import defaultdict
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -11,6 +14,21 @@ from config import DUMMY_TRACKING
 
 if not DUMMY_TRACKING:
     from insightface.app import FaceAnalysis
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+TRACKER_SRC_DIR = REPO_ROOT / "face-detect-track" / "src"
+TRACKER_CLI_MODULE = "movie_like_shots.cli"
+DEFAULT_TRACKER_TYPE = "ocsort"
+DEFAULT_TRACKER_DEVICE = "cpu"
+TRACKER_DET_SIZE = 640
+TRACKER_DET_THRESH = 0.35
+TRACKER_NMS_THRESH = 0.4
+TRACKER_NUM_BINS = 64
+TRACKER_SHOT_CHANGE_THRESHOLD = 0.4
+TRACKER_USE_SHOT_CHANGE = True
+TRACKER_USE_SHARED_MEMORY = True
+TRACKER_TIMEOUT_SECONDS = 600
+DEFAULT_TRACKER_SIMILARITY_THRESHOLD = 0.4
 
 _app = None
 
@@ -27,6 +45,47 @@ def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
 
+def _frame_files(frames_dir: str) -> list[str]:
+    return sorted(
+        f for f in os.listdir(frames_dir) if f.startswith("frame_") and f.endswith(".jpg")
+    )
+
+
+def _frame_area(bbox: list[float]) -> float:
+    return max(0.0, float(bbox[2]) - float(bbox[0])) * max(
+        0.0, float(bbox[3]) - float(bbox[1])
+    )
+
+
+def _normalize_gender(value: Any) -> str:
+    if isinstance(value, (int, np.integer)):
+        return "male" if int(value) == 1 else "female"
+    gender = str(value).strip().lower()
+    if gender in {"m", "male", "man", "1"}:
+        return "male"
+    if gender in {"f", "female", "woman", "0"}:
+        return "female"
+    return gender or "unknown"
+
+
+def _expand_bbox(bbox: list[float], frame: np.ndarray, padding: float = 0.15) -> list[int]:
+    x1, y1, x2, y2 = [float(v) for v in bbox]
+    width = max(1.0, x2 - x1)
+    height = max(1.0, y2 - y1)
+    pad_x = width * padding
+    pad_y = height * padding
+    h, w = frame.shape[:2]
+    left = max(0, int(np.floor(x1 - pad_x)))
+    top = max(0, int(np.floor(y1 - pad_y)))
+    right = min(w, int(np.ceil(x2 + pad_x)))
+    bottom = min(h, int(np.ceil(y2 + pad_y)))
+    if right <= left:
+        right = min(w, left + 1)
+    if bottom <= top:
+        bottom = min(h, top + 1)
+    return [left, top, right, bottom]
+
+
 def _crop_face_thumbnail(frame: np.ndarray, bbox: list[float], size: int = 112) -> str:
     x1, y1, x2, y2 = [int(v) for v in bbox]
     h, w = frame.shape[:2]
@@ -41,43 +100,281 @@ def _crop_face_thumbnail(frame: np.ndarray, bbox: list[float], size: int = 112) 
     return f"data:image/jpeg;base64,{b64}"
 
 
+def _tracker_env() -> dict[str, str]:
+    env = os.environ.copy()
+    pythonpath_parts = [str(TRACKER_SRC_DIR)]
+    existing_pythonpath = env.get("PYTHONPATH")
+    if existing_pythonpath:
+        pythonpath_parts.append(existing_pythonpath)
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_parts)
+    return env
+
+
+def _find_original_video_path(storage_dir: str) -> str:
+    storage_path = Path(storage_dir)
+    for candidate in sorted(storage_path.iterdir()):
+        if candidate.is_file() and candidate.name.startswith("original"):
+            return str(candidate)
+
+    for ext in (".mp4", ".mov", ".webm", ".avi"):
+        candidates = sorted(storage_path.glob(f"*{ext}"))
+        if candidates:
+            return str(candidates[0])
+
+    raise FileNotFoundError(f"No source video found in {storage_dir}")
+
+
+def _build_tracker_command(video_path: str, output_dir: str) -> list[str]:
+    command = [
+        sys.executable,
+        "-m",
+        TRACKER_CLI_MODULE,
+        video_path,
+        "--output-dir",
+        output_dir,
+        "--tracker",
+        DEFAULT_TRACKER_TYPE,
+        "--device",
+        DEFAULT_TRACKER_DEVICE,
+    ]
+    command.extend(
+        [
+            "--det-size",
+            str(TRACKER_DET_SIZE),
+            "--det-thresh",
+            str(TRACKER_DET_THRESH),
+            "--nms-thresh",
+            str(TRACKER_NMS_THRESH),
+            "--num-bins",
+            str(TRACKER_NUM_BINS),
+            "--shot-change-threshold",
+            str(TRACKER_SHOT_CHANGE_THRESHOLD),
+        ]
+    )
+    if not TRACKER_USE_SHOT_CHANGE:
+        command.append("--disable-shot-change")
+    if not TRACKER_USE_SHARED_MEMORY:
+        command.append("--disable-shared-memory")
+    return command
+
+
+def _parse_tracker_json_path(stdout: str | None, default_path: str) -> str:
+    if stdout:
+        for line in stdout.splitlines():
+            line = line.strip()
+            if line.startswith("JSON:"):
+                candidate = line.split("JSON:", 1)[1].strip()
+                if candidate:
+                    return candidate
+    return default_path
+
+
+def _run_tracker_pipeline(video_path: str, output_dir: str) -> str:
+    command = _build_tracker_command(video_path, output_dir)
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=str(REPO_ROOT),
+            env=_tracker_env(),
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=TRACKER_TIMEOUT_SECONDS,
+        )
+    except subprocess.CalledProcessError as exc:
+        details = exc.stderr or exc.stdout or str(exc)
+        raise RuntimeError(
+            f"movie_like_shots tracker failed for {video_path}: {details}"
+        ) from exc
+
+    default_json_path = os.path.join(
+        output_dir, f"{Path(video_path).stem}.tracks.json"
+    )
+    json_path = _parse_tracker_json_path(getattr(completed, "stdout", None), default_json_path)
+    if not os.path.exists(json_path):
+        raise FileNotFoundError(
+            f"Tracker JSON not found at {json_path}. stdout={getattr(completed, 'stdout', '')!r}"
+        )
+    return json_path
+
+
+def _load_tracker_export(json_path: str) -> dict[str, Any]:
+    with open(json_path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _collect_track_entries(tracker_export: dict[str, Any]) -> dict[int, list[dict[str, Any]]]:
+    track_entries: dict[int, list[dict[str, Any]]] = {}
+    for frame_key, frame_entries in tracker_export.get("frames", {}).items():
+        frame_index = int(frame_key)
+        for entry in frame_entries:
+            track_id = int(entry["id"])
+            track_entries.setdefault(track_id, []).append(
+                {
+                    "frame_index": frame_index,
+                    "bbox": [float(v) for v in entry["bbox"]],
+                    "confidence": float(entry.get("confidence", 1.0)),
+                }
+            )
+    return track_entries
+
+
+def _ordered_track_ids(tracker_export: dict[str, Any]) -> list[int]:
+    track_summary = tracker_export.get("track_summary", {})
+    summary_ids = track_summary.get("ids", [])
+    if summary_ids:
+        summary_entries = [
+            (int(entry["id"]), int(entry.get("first_frame", 0)))
+            for entry in summary_ids
+        ]
+        return [track_id for track_id, _first_frame in sorted(
+            summary_entries, key=lambda item: (item[1], item[0])
+        )]
+
+    track_entries = _collect_track_entries(tracker_export)
+    return sorted(
+        track_entries.keys(),
+        key=lambda track_id: (
+            min(entry["frame_index"] for entry in track_entries[track_id]),
+            track_id,
+        ),
+    )
+
+
+def _extract_face_metadata(
+    frames_dir: str,
+    representative_frame_index: int,
+    representative_bbox: list[float],
+    storage_dir: str,
+    face_id: str,
+) -> dict[str, Any]:
+    frame_files = _frame_files(frames_dir)
+    if representative_frame_index < 0 or representative_frame_index >= len(frame_files):
+        return {
+            "age": 0,
+            "gender": "unknown",
+            "thumbnail": "",
+            "thumbnail_path": f"{face_id}_thumb.jpg",
+            "embedding": [0.0] * 512,
+        }
+
+    frame_path = os.path.join(frames_dir, frame_files[representative_frame_index])
+    frame = cv2.imread(frame_path)
+    if frame is None:
+        return {
+            "age": 0,
+            "gender": "unknown",
+            "thumbnail": "",
+            "thumbnail_path": f"{face_id}_thumb.jpg",
+            "embedding": [0.0] * 512,
+        }
+
+    padded_bbox = _expand_bbox(representative_bbox, frame)
+    x1, y1, x2, y2 = padded_bbox
+    crop = frame[y1:y2, x1:x2]
+    thumbnail = _crop_face_thumbnail(frame, padded_bbox)
+    thumb_path = f"{face_id}_thumb.jpg"
+    if crop.size > 0:
+        cv2.imwrite(os.path.join(storage_dir, thumb_path), crop)
+
+    age = 0
+    gender = "unknown"
+    embedding: list[float] = [0.0] * 512
+
+    if crop.size > 0 and not DUMMY_TRACKING:
+        faces = _get_app().get(crop)
+        if faces:
+            representative_face = max(
+                faces,
+                key=lambda face: (face.bbox[2] - face.bbox[0]) * (face.bbox[3] - face.bbox[1]),
+            )
+            age = int(getattr(representative_face, "age", 0) or 0)
+            gender = _normalize_gender(getattr(representative_face, "gender", "unknown"))
+            embedding = (
+                representative_face.normed_embedding.tolist()
+                if hasattr(representative_face, "normed_embedding")
+                else [0.0] * 512
+            )
+
+    return {
+        "age": age,
+        "gender": gender,
+        "thumbnail": thumbnail,
+        "thumbnail_path": thumb_path,
+        "embedding": embedding,
+    }
+
+
+def _translate_tracker_export_to_faces(
+    tracker_export: dict[str, Any],
+    frames_dir: str,
+    storage_dir: str,
+) -> dict[str, dict[str, Any]]:
+    track_entries = _collect_track_entries(tracker_export)
+    faces_data: dict[str, dict[str, Any]] = {}
+
+    for face_index, track_id in enumerate(_ordered_track_ids(tracker_export)):
+        entries = sorted(track_entries.get(track_id, []), key=lambda item: item["frame_index"])
+        if not entries:
+            continue
+
+        representative_entry = max(entries, key=lambda item: _frame_area(item["bbox"]))
+        face_id = f"face_{face_index}"
+        metadata = _extract_face_metadata(
+            frames_dir,
+            int(representative_entry["frame_index"]),
+            list(representative_entry["bbox"]),
+            storage_dir,
+            face_id,
+        )
+
+        faces_data[face_id] = {
+            "age": metadata["age"],
+            "gender": metadata["gender"],
+            "thumbnail": metadata["thumbnail"],
+            "thumbnail_path": metadata["thumbnail_path"],
+            "embedding": metadata["embedding"],
+            "frames": {
+                str(entry["frame_index"]): list(entry["bbox"])
+                for entry in entries
+            },
+            "frame_count": len(entries),
+        }
+
+    return faces_data
+
+
 def _dummy_detect_and_cluster(
     frames_dir: str, storage_dir: str, subsample: int = 5
 ) -> dict:
     """Return 3 random square bounding boxes as fake faces for frontend dev."""
-    frame_files = sorted(
-        f for f in os.listdir(frames_dir) if f.startswith("frame_") and f.endswith(".jpg")
-    )
+    frame_files = _frame_files(frames_dir)
     if not frame_files:
         return {"faces": {}}
 
-    # Read first frame to get dimensions
     sample = cv2.imread(os.path.join(frames_dir, frame_files[0]))
     if sample is None:
         return {"faces": {}}
     h, w = sample.shape[:2]
 
-    rng = random.Random(42)  # deterministic so reloads are stable
-    face_size = min(h, w) // 5  # square side length
+    rng = random.Random(42)
+    face_size = max(1, min(h, w) // 5)
 
     faces_data = {}
     for idx in range(3):
         face_id = f"face_{idx}"
-        # Pick a random position that fits within the frame
         x1 = rng.randint(0, max(0, w - face_size))
         y1 = rng.randint(0, max(0, h - face_size))
         x2 = x1 + face_size
         y2 = y1 + face_size
         bbox = [float(x1), float(y1), float(x2), float(y2)]
 
-        # Build frames dict — assign this box to every subsampled frame
         frames_dict = {}
-        for i, fname in enumerate(frame_files):
+        for i, _fname in enumerate(frame_files):
             if i % subsample != 0:
                 continue
             frames_dict[str(i)] = bbox
 
-        # Thumbnail from the first frame
         thumbnail = _crop_face_thumbnail(sample, bbox)
         thumb_path = f"{face_id}_thumb.jpg"
         crop = sample[y1:y2, x1:x2]
@@ -103,92 +400,10 @@ def detect_and_cluster(
     if DUMMY_TRACKING:
         return _dummy_detect_and_cluster(frames_dir, storage_dir, subsample)
 
-    app = _get_app()
-    frame_files = sorted(
-        f for f in os.listdir(frames_dir) if f.startswith("frame_") and f.endswith(".jpg")
-    )
-
-    detections: list[tuple[int, object]] = []
-    frame_cache: dict[int, np.ndarray] = {}
-
-    for i, fname in enumerate(frame_files):
-        if i % subsample != 0:
-            continue
-        frame_path = os.path.join(frames_dir, fname)
-        frame = cv2.imread(frame_path)
-        if frame is None:
-            continue
-        frame_cache[i] = frame
-        faces = app.get(frame)
-        for face in faces:
-            detections.append((i, face))
-
-    if not detections:
-        return {"faces": {}}
-
-    clusters: list[list[tuple[int, object]]] = []
-    similarity_threshold = 0.4
-
-    for frame_idx, face in detections:
-        emb = face.normed_embedding
-        matched = False
-        for cluster in clusters:
-            rep_emb = cluster[0][1].normed_embedding
-            if _cosine_similarity(emb, rep_emb) >= similarity_threshold:
-                cluster.append((frame_idx, face))
-                matched = True
-                break
-        if not matched:
-            clusters.append([(frame_idx, face)])
-
-    faces_data = {}
-    for cluster_idx, cluster in enumerate(clusters):
-        face_id = f"face_{cluster_idx}"
-        ages = [f.age for _, f in cluster]
-        genders = [f.gender for _, f in cluster]
-
-        best_idx, best_face = max(
-            cluster,
-            key=lambda x: (x[1].bbox[2] - x[1].bbox[0]) * (x[1].bbox[3] - x[1].bbox[1])
-        )
-        best_frame = frame_cache.get(best_idx)
-        thumbnail = ""
-        if best_frame is not None:
-            thumbnail = _crop_face_thumbnail(best_frame, best_face.bbox.tolist())
-
-        thumb_path = f"{face_id}_thumb.jpg"
-        if best_frame is not None:
-            x1, y1, x2, y2 = [int(v) for v in best_face.bbox]
-            h, w = best_frame.shape[:2]
-            crop = best_frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
-            if crop.size > 0:
-                cv2.imwrite(os.path.join(storage_dir, thumb_path), crop)
-
-        frames_dict = {}
-        for frame_idx, face in cluster:
-            frames_dict[str(frame_idx)] = face.bbox.tolist()
-
-        avg_age = int(np.mean(ages))
-        gender_counts = defaultdict(int)
-        for g in genders:
-            gender_counts[g] += 1
-        raw_gender = max(gender_counts, key=gender_counts.get)
-        # InsightFace returns gender as int (0=female, 1=male) or str
-        if isinstance(raw_gender, (int, np.integer)):
-            majority_gender = "male" if int(raw_gender) == 1 else "female"
-        else:
-            majority_gender = str(raw_gender)
-
-        faces_data[face_id] = {
-            "age": avg_age,
-            "gender": majority_gender,
-            "thumbnail": thumbnail,
-            "thumbnail_path": thumb_path,
-            "embedding": cluster[0][1].normed_embedding.tolist(),
-            "frames": frames_dict,
-            "frame_count": len(frames_dict),
-        }
-
+    video_path = _find_original_video_path(storage_dir)
+    tracker_json_path = _run_tracker_pipeline(video_path, storage_dir)
+    tracker_export = _load_tracker_export(tracker_json_path)
+    faces_data = _translate_tracker_export_to_faces(tracker_export, frames_dir, storage_dir)
     return {"faces": faces_data}
 
 
@@ -200,64 +415,52 @@ def extract_face_clips(
 ) -> dict[str, dict]:
     """Extract per-face cropped frame sequences from full frames.
 
-    For each selected face:
-    1. Re-detect the face on every frame using embedding matching
-    2. Crop a padded square region around the face
-    3. Save cropped frames to {output_base_dir}/{face_id}/frame_XXXX.jpg
-
-    Returns a manifest dict:
-    {
-        "face_0": {
-            "clip_dir": "/path/to/face_0/",
-            "crops": {
-                "frame_0001.jpg": (x1, y1, x2, y2),
-            },
-            "crop_size": (width, height),
-        }
-    }
+    Uses the stored per-frame tracked bboxes from faces.json, without
+    re-running face detection.
     """
-    app = _get_app()
-    frame_files = sorted(
-        f for f in os.listdir(frames_dir)
-        if f.startswith("frame_") and f.endswith(".jpg")
-    )
+    frame_files = _frame_files(frames_dir)
     manifests = {}
 
     for face_id in selected_face_ids:
-        face_data = faces_json["faces"][face_id]
-        target_embedding = np.array(face_data["embedding"])
+        face_data = faces_json.get("faces", {}).get(face_id)
+        if not face_data:
+            continue
+
+        stored_frames = sorted(
+            (
+                int(frame_key),
+                [float(v) for v in bbox],
+            )
+            for frame_key, bbox in face_data.get("frames", {}).items()
+        )
+        if not stored_frames:
+            continue
 
         clip_dir = os.path.join(output_base_dir, face_id)
         os.makedirs(clip_dir, exist_ok=True)
 
-        # Single pass: detect face on every frame, cache frame + bbox
-        per_frame_data = {}  # fname -> (frame, bbox)
-        for fname in frame_files:
-            frame = cv2.imread(os.path.join(frames_dir, fname))
+        per_frame_data: list[tuple[str, np.ndarray, list[float]]] = []
+        for frame_idx, bbox in stored_frames:
+            if frame_idx < 0 or frame_idx >= len(frame_files):
+                continue
+            frame_path = os.path.join(frames_dir, frame_files[frame_idx])
+            frame = cv2.imread(frame_path)
             if frame is None:
                 continue
-            detected = app.get(frame)
-            for face in detected:
-                sim = _cosine_similarity(face.normed_embedding, target_embedding)
-                if sim >= 0.4:
-                    per_frame_data[fname] = (frame, face.bbox.tolist())
-                    break
+            per_frame_data.append((frame_files[frame_idx], frame, bbox))
 
         if not per_frame_data:
             continue
 
-        # Compute consistent crop size from the largest face across all frames
-        all_bboxes = [bbox for _, bbox in per_frame_data.values()]
         max_face_size = max(
-            max(b[2] - b[0], b[3] - b[1]) for b in all_bboxes
+            max(bbox[2] - bbox[0], bbox[3] - bbox[1]) for _, _, bbox in per_frame_data
         )
-        crop_size = int(max_face_size * 1.5)
+        crop_size = max(2, int(max_face_size * 1.5))
 
-        # Crop each frame at a square region centered on the face
-        crops_manifest = {}
-        for fname, (frame, bbox) in per_frame_data.items():
+        crops_manifest: dict[str, tuple[int, int, int, int]] = {}
+        actual_sizes: list[tuple[int, int]] = []
+        for fname, frame, bbox in per_frame_data:
             h, w = frame.shape[:2]
-
             cx = (bbox[0] + bbox[2]) / 2
             cy = (bbox[1] + bbox[3]) / 2
             half = crop_size / 2
@@ -266,21 +469,23 @@ def extract_face_clips(
             y1 = int(max(0, cy - half))
             x2 = int(min(w, x1 + crop_size))
             y2 = int(min(h, y1 + crop_size))
-            # Adjust start if crop was clamped at the end
             x1 = int(max(0, x2 - crop_size))
             y1 = int(max(0, y2 - crop_size))
 
             crop = frame[y1:y2, x1:x2]
             cv2.imwrite(os.path.join(clip_dir, fname), crop)
             crops_manifest[fname] = (x1, y1, x2, y2)
+            actual_sizes.append((x2 - x1, y2 - y1))
 
-        actual_h = y2 - y1
-        actual_w = x2 - x1
+        if not crops_manifest:
+            continue
 
+        manifest_width = max(size[0] for size in actual_sizes)
+        manifest_height = max(size[1] for size in actual_sizes)
         manifests[face_id] = {
             "clip_dir": clip_dir,
             "crops": crops_manifest,
-            "crop_size": (actual_w, actual_h),
+            "crop_size": (manifest_width, manifest_height),
         }
 
     return manifests
@@ -292,10 +497,10 @@ def save_faces_json(faces_data: dict, video_info: dict, output_path: str) -> Non
         "total_frames": video_info["total_frames"],
         "faces": faces_data["faces"],
     }
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 
 def load_faces_json(path: str) -> dict:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return json.load(f)

@@ -1,7 +1,6 @@
 import os
 import uuid
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,10 +10,52 @@ from models.schemas import (
     DetectFacesRequest, DetectFacesResponse, FaceInfo,
     StatusResponse, SwapRequest, SwapResponse, UploadResponse,
 )
-from config import STORAGE_DIR, ENABLE_LIPSYNC, FRAME_SUBSAMPLE
+from config import (
+    DUMMY_TRACKING,
+    STORAGE_DIR,
+    ENABLE_LIPSYNC,
+    FRAME_SUBSAMPLE,
+    TRACKER_BACKEND,
+    TRACKER_DET_SIZE,
+    TRACKER_DET_THRESH,
+    TRACKER_DEVICE,
+    TRACKER_NMS_THRESH,
+    TRACKER_NUM_BINS,
+    TRACKER_SHOT_CHANGE_THRESHOLD,
+    TRACKER_SIMILARITY_THRESHOLD,
+    TRACKER_TIMEOUT_SECONDS,
+    TRACKER_TYPE,
+    TRACKER_USE_SHARED_MEMORY,
+    TRACKER_USE_SHOT_CHANGE,
+)
 from services import video, face_tracker, face_swapper
 
+
+def _configure_face_tracker_backend() -> None:
+    """Expose tracker config to the compatibility layer as module hints."""
+
+    face_tracker.TRACKER_BACKEND = TRACKER_BACKEND
+    face_tracker.TRACKER_TYPE = TRACKER_TYPE
+    face_tracker.TRACKER_DEVICE = TRACKER_DEVICE
+    face_tracker.DEFAULT_TRACKER_TYPE = TRACKER_TYPE
+    face_tracker.DEFAULT_TRACKER_DEVICE = TRACKER_DEVICE
+    face_tracker.TRACKER_DET_SIZE = TRACKER_DET_SIZE
+    face_tracker.TRACKER_DET_THRESH = TRACKER_DET_THRESH
+    face_tracker.TRACKER_NMS_THRESH = TRACKER_NMS_THRESH
+    face_tracker.TRACKER_NUM_BINS = TRACKER_NUM_BINS
+    face_tracker.TRACKER_SHOT_CHANGE_THRESHOLD = TRACKER_SHOT_CHANGE_THRESHOLD
+    face_tracker.DEFAULT_TRACKER_SIMILARITY_THRESHOLD = TRACKER_SIMILARITY_THRESHOLD
+    face_tracker.TRACKER_USE_SHOT_CHANGE = TRACKER_USE_SHOT_CHANGE
+    face_tracker.TRACKER_USE_SHARED_MEMORY = TRACKER_USE_SHARED_MEMORY
+    face_tracker.TRACKER_TIMEOUT_SECONDS = TRACKER_TIMEOUT_SECONDS
+    face_tracker.FRAME_SUBSAMPLE = FRAME_SUBSAMPLE
+    face_tracker.DUMMY_TRACKING = DUMMY_TRACKING
+
+
+_configure_face_tracker_backend()
+
 app = FastAPI(title="VEED Face Swap")
+app.state.tracker_backend = TRACKER_BACKEND
 
 app.add_middleware(
     CORSMiddleware,
@@ -68,7 +109,7 @@ async def detect_faces(req: DetectFacesRequest):
 
     frames_dir = os.path.join(vdir, "frames")
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     video_info = await loop.run_in_executor(
         None, video.extract_frames, original, frames_dir
     )
@@ -114,7 +155,7 @@ async def _run_swap_job(job_id: str, video_id: str, face_ids: list[str]):
 
             # Phase 1: face_tracker extracts per-face cropped clips
             clips_dir = os.path.join(vdir, "face_clips")
-            manifests = await asyncio.get_event_loop().run_in_executor(
+            manifests = await asyncio.get_running_loop().run_in_executor(
                 None,
                 face_tracker.extract_face_clips,
                 frames_dir,
@@ -130,7 +171,7 @@ async def _run_swap_job(job_id: str, video_id: str, face_ids: list[str]):
                 jobs[job_id]["progress"] = 0.3 + p * 0.5
 
             adapter = face_swapper.InsightFaceSwapAdapter()
-            await asyncio.get_event_loop().run_in_executor(
+            await asyncio.get_running_loop().run_in_executor(
                 None,
                 face_swapper.swap_faces_pipeline,
                 manifests,
@@ -162,7 +203,7 @@ async def _run_swap_job(job_id: str, video_id: str, face_ids: list[str]):
 
             audio_path = os.path.join(vdir, "audio.aac")
             output_path = os.path.join(vdir, "output.mp4")
-            await asyncio.get_event_loop().run_in_executor(
+            await asyncio.get_running_loop().run_in_executor(
                 None,
                 video.reassemble_video,
                 swapped_dir,
