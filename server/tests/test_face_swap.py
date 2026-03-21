@@ -7,7 +7,7 @@ Prerequisites:
   1. FaceFusion API running on port 8001:
        cd facefusion && .venv/bin/python api.py
   2. Run from the server directory:
-       cd VEED-Hackathon/server
+       cd VEEDHackathon/server
        python -m pytest tests/test_face_swap.py -v -s
 """
 
