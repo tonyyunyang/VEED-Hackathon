@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useState } from "react";
+import React, { useRef, useEffect, useState, useMemo } from "react";
 import videoData from "../assets/insightface_video_data.json";
 import { Button } from "./ui/button";
 import { Slider } from "./ui/slider";
@@ -43,6 +43,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [playbackRate, setPlaybackRate] = useState(1);
   const [selectionMode, setSelectionMode] = useState(false);
   const [hovered, setHovered] = useState(false);
+  const [faceControlMode, setFaceControlMode] = useState(false);
+  const [selectedPersonIds, setSelectedPersonIds] = useState<number[]>([]);
+  const [appliedSelectedIds, setAppliedSelectedIds] = useState<number[]>([]);
 
   // Selection state (timeframe isolation)
   const [startTime, setStartTime] = useState(0);
@@ -52,11 +55,111 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [tempSelection, setTempSelection] = useState<[number, number]>([0, 0]);
   const [keyframes, setKeyframes] = useState<string[]>([]);
 
+  // Unique people metadata
+  const personMetaData = useMemo(() => {
+    const people: Record<number, any> = {};
+    const sortedFrames = Object.keys(videoData.frames)
+      .map(Number)
+      .sort((a, b) => a - b);
+
+    sortedFrames.forEach((frameIdx) => {
+      const framePeople = (videoData.frames as any)[frameIdx.toString()];
+      framePeople.forEach((p: any) => {
+        if (!people[p.id]) {
+          // If we haven't seen this person, or we find a better score (up to 1)
+          people[p.id] = {
+            id: p.id,
+            label: p.label,
+            bestFrameIndex: frameIdx,
+            bbox: p.bbox,
+            det_score: p.det_score,
+            color: getPersonColor(p.id),
+          };
+        } else if (
+          people[p.id].det_score < 1 &&
+          p.det_score > people[p.id].det_score
+        ) {
+          people[p.id].bestFrameIndex = frameIdx;
+          people[p.id].bbox = p.bbox;
+          people[p.id].det_score = p.det_score;
+        }
+      });
+    });
+    return Object.values(people);
+  }, []);
+
+  const thumbnailCanvasesRef = useRef<Record<number, HTMLCanvasElement | null>>(
+    {},
+  );
+  const hiddenVideoRef = useRef<HTMLVideoElement>(null);
+
+  const generateThumbnails = async () => {
+    const video = hiddenVideoRef.current;
+    if (!video) return;
+
+    for (const person of personMetaData) {
+      const canvas = thumbnailCanvasesRef.current[person.id];
+      if (!canvas) continue;
+
+      const time = person.bestFrameIndex / videoData.video_metadata.fps;
+      video.currentTime = time;
+
+      await new Promise((resolve) => {
+        const onSeeked = () => {
+          video.removeEventListener("seeked", onSeeked);
+          const ctx = canvas.getContext("2d");
+          if (ctx) {
+            const [x1, y1, x2, y2] = person.bbox;
+            const w = x2 - x1;
+            const h = y2 - y1;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(
+              video,
+              x1,
+              y1,
+              w,
+              h,
+              0,
+              0,
+              canvas.width,
+              canvas.height,
+            );
+          }
+          resolve(null);
+        };
+        video.addEventListener("seeked", onSeeked);
+      });
+    }
+  };
+
+  const enterFaceControlMode = () => {
+    //setPlaying(false);
+    //videoRef.current?.pause();
+    setFaceControlMode(true);
+    if (selectedPersonIds.length === 0) {
+      setSelectedPersonIds(personMetaData.map((p) => p.id));
+    }
+  };
+
+  const togglePersonSelection = (id: number) => {
+    setSelectedPersonIds((prev) =>
+      prev.includes(id) ? prev.filter((pid) => pid !== id) : [...prev, id],
+    );
+  };
+
+  useEffect(() => {
+    if (faceControlMode) {
+      generateThumbnails();
+    }
+  }, [faceControlMode]);
+
   // Setup canvas drawing loop
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
+
+    let animationFrameId: number;
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
@@ -99,6 +202,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             const scale = drawWidth / origW;
 
             frameData.forEach((person: any) => {
+              if (
+                (faceControlMode && !selectedPersonIds.includes(person.id)) ||
+                (!faceControlMode &&
+                  appliedSelectedIds.length > 0 &&
+                  !appliedSelectedIds.includes(person.id))
+              ) {
+                return;
+              }
               const [x1, y1, x2, y2] = person.bbox;
               const color = getPersonColor(person.id);
 
@@ -123,11 +234,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           }
         }
       }
-      requestAnimationFrame(renderFrame);
+      animationFrameId = requestAnimationFrame(renderFrame);
     };
 
     renderFrame();
-  }, []);
+
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [faceControlMode, selectedPersonIds, appliedSelectedIds]);
 
   // Sync canvas size with parent
   useEffect(() => {
@@ -298,6 +413,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         muted={false}
       />
 
+      <video
+        ref={hiddenVideoRef}
+        src={videoSrc}
+        className="hidden"
+        preload="auto"
+      />
+
       <canvas
         ref={canvasRef}
         className="block"
@@ -307,7 +429,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       {/* Hover Controls */}
       <div
         className={`hover-controls absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-4xl px-4 transition-all duration-500 ease-in-out ${
-          hovered || selectionMode
+          hovered || selectionMode || faceControlMode
             ? "opacity-100"
             : "opacity-0 pointer-events-none"
         }`}
@@ -315,7 +437,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         <TooltipProvider>
           <Toolbar
             className={`bg-background/80 backdrop-blur-md p-4 rounded-2xl border shadow-2xl flex flex-col gap-4 transition-all duration-500 ease-in-out overflow-hidden ${
-              selectionMode ? "max-w-5xl" : "max-w-4xl"
+              selectionMode || faceControlMode ? "max-w-5xl" : "max-w-4xl"
             }`}
           >
             {selectionMode ? (
@@ -388,6 +510,93 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   >
                     <Check className="w-4 h-4 mr-2" />
                     Accept Selection
+                  </Button>
+                </div>
+              </div>
+            ) : faceControlMode ? (
+              // Face Control Mode Controls
+              <div className="flex flex-col gap-6 w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                      Person Isolation
+                    </h3>
+                    <p className="text-xs text-muted-foreground font-medium">
+                      Select unique individuals to track
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-6 overflow-x-auto pb-2 min-h-[140px] items-center justify-center">
+                  {personMetaData.map((person) => (
+                    <div
+                      key={person.id}
+                      onClick={() => togglePersonSelection(person.id)}
+                      className={`relative cursor-pointer group transition-all duration-400 ${
+                        selectedPersonIds.includes(person.id)
+                          ? "scale-110"
+                          : "opacity-40 grayscale scale-90 hover:opacity-70 hover:grayscale-0 hover:scale-95"
+                      }`}
+                    >
+                      <div
+                        className="w-24 h-24 rounded-md overflow-hidden border-4 transition-all duration-500 shadow-xl"
+                        style={{
+                          borderColor: selectedPersonIds.includes(person.id)
+                            ? person.color
+                            : "rgba(255,255,255,0.1)",
+                          boxShadow: selectedPersonIds.includes(person.id)
+                            ? `0 10px 25px -5px ${person.color}44`
+                            : "none",
+                        }}
+                      >
+                        <canvas
+                          ref={(el) => {
+                            thumbnailCanvasesRef.current[person.id] = el;
+                          }}
+                          width={100}
+                          height={100}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                      <div
+                        className="absolute -bottom-2 left-1/2 -translate-x-1/2 px-3 py-1 rounded-lg text-[10px] font-black text-white shadow-2xl whitespace-nowrap transition-transform duration-300 group-hover:scale-110"
+                        style={{ backgroundColor: person.color }}
+                      >
+                        {person.label} #{person.id}
+                      </div>
+
+                      {selectedPersonIds.includes(person.id) && (
+                        <div className="absolute -top-2 -right-2 bg-primary text-primary-foreground rounded-full p-1 shadow-lg animate-in zoom-in duration-300">
+                          <Check className="w-3 h-3" />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex justify-end items-center gap-3 pt-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      setSelectedPersonIds(appliedSelectedIds);
+                      setFaceControlMode(false);
+                    }}
+                    className="hover:bg-destructive/10 hover:text-destructive transition-colors px-6"
+                  >
+                    Discard
+                  </Button>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => {
+                      setAppliedSelectedIds(selectedPersonIds);
+                      setFaceControlMode(false);
+                    }}
+                    className="bg-primary hover:bg-primary/90 shadow-xl shadow-primary/20 px-8 font-bold"
+                  >
+                    <Check className="w-4 h-4 mr-2" />
+                    Done
                   </Button>
                 </div>
               </div>
@@ -480,7 +689,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             onClick={enterSelectionMode}
                             className="h-9 px-4 font-semibold shadow-sm hover:shadow-md transition-all active:scale-95"
                           >
-                            <Scissors className="w-4 h-4 " />
+                            <Scissors className="w-4 h-4 mr-2" />
                           </Button>
                         }
                       />
@@ -492,7 +701,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         render={
                           <Button
                             size="sm"
-                            onClick={enterSelectionMode}
+                            onClick={enterFaceControlMode}
                             className="h-9 px-4 font-semibold shadow-sm hover:shadow-md transition-all active:scale-95"
                           >
                             <ScanFace className="w-4 h-4 mr-2" />
