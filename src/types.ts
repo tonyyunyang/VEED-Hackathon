@@ -28,4 +28,10 @@ export type AppStep =
   | "select"
   | "processing"
   | "player";
-
+export interface GalleryVideo {
+  id: string;
+  name: string;
+  url: string;
+  path: string;
+  isUserUploaded?: boolean;
+}

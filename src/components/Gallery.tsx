@@ -1,40 +1,44 @@
 import { Card } from "./ui/card";
 import { Upload, Play } from "lucide-react";
 import { Button } from "./ui/button";
+import { useRef } from "react";
+import type { GalleryVideo } from "../types";
 
 interface GalleryProps {
+  videos: GalleryVideo[];
   onSelect: (src: string) => void;
-  onUploadClick: () => void;
+  onUpload: (file: File) => void;
 }
 
-export function Gallery({ onSelect, onUploadClick }: GalleryProps) {
-  // Use Vite's glob import to get all videos from the projects folder
-  const videoModules = import.meta.glob("../assets/video-projects/*.mp4", {
-    eager: true,
-    query: "?url",
-    import: "default",
-  });
+export function Gallery({ videos, onSelect, onUpload }: GalleryProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const videos = Object.entries(videoModules).map(([path, url]) => ({
-    name: path.split("/").pop()?.replace(".mp4", "") || "Video",
-    url: url as string,
-    path,
-  }));
+  const handleUploadClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      onUpload(file);
+    }
+  };
 
   return (
     <div className="w-full max-w-6xl mx-auto p-6">
-      <div className="flex justify-between items-center mb-8">
-        <h2 className="text-2xl font-bold">Your Video Projects</h2>
-        <Button onClick={onUploadClick} className="gap-2">
-          <Upload className="w-4 h-4" />
-          Upload New
-        </Button>
-      </div>
+      {/* Hidden file input */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        accept="video/mp4,video/x-m4v,video/*"
+        className="hidden"
+      />
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {videos.map((video) => (
           <Card
-            key={video.path}
+            key={video.path + video.url}
             className="group relative overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary transition-all rounded-2xl border-none shadow-lg bg-card"
             onClick={() => onSelect(video.url)}
           >
@@ -59,16 +63,18 @@ export function Gallery({ onSelect, onUploadClick }: GalleryProps) {
               <p className="font-semibold text-foreground truncate">
                 {video.name}
               </p>
-              <p className="text-xs text-muted-foreground mt-1 uppercase tracking-wider">
-                Video Project
-              </p>
+              <div className="flex items-center justify-between mt-1">
+                <p className="text-xs text-muted-foreground uppercase tracking-wider">
+                  {video.isUserUploaded ? "Uploaded Video" : "Built-in Sample"}
+                </p>
+              </div>
             </div>
           </Card>
         ))}
 
         <div
           className="border-2 border-dashed border-muted-foreground/25 rounded-2xl aspect-video flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-muted/50 hover:border-primary/50 transition-all group"
-          onClick={onUploadClick}
+          onClick={handleUploadClick}
         >
           <div className="bg-muted rounded-full p-4 group-hover:bg-primary/10 group-hover:text-primary transition-colors">
             <Upload className="w-8 h-8" />
