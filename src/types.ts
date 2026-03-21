@@ -1,46 +1,24 @@
-export interface Van {
-    id: string;
-    name: string;
-    price: number;
-    description: string;
-    imageUrl: string;
-    type: string;
-    hostId: string;
+export interface FaceInfo {
+  face_id: string;
+  thumbnail: string;
+  age: number;
+  gender: string;
+  frame_count: number;
 }
 
-export interface User {
-    id: string;
-    email: string;
-    name: string;
-    password?: string;
-    vans?: Van[];
+export interface DetectFacesResponse {
+  video_id: string;
+  faces: FaceInfo[];
 }
 
-export interface Review {
-    id: string;
-    rating: number;
-    name: string;
-    date: string;
-    text: string;
-    hostId: string;
+export interface SwapResponse {
+  job_id: string;
 }
 
-export interface Transaction {
-    id: string;
-    amount: number;
-    date: string;
-    hostId: string;
+export interface StatusResponse {
+  status: "processing" | "completed" | "failed";
+  progress: number;
+  error: string | null;
 }
 
-export interface HostVanInfoContextType {
-    photos: { imageUrl: string }[];
-    details: {
-        name: string | undefined;
-        category: string | undefined;
-        description: string | undefined;
-    };
-    pricing: {
-        price: number | undefined;
-        freq: string;
-    };
-}
+export type AppStep = "upload" | "detecting" | "select" | "processing";
