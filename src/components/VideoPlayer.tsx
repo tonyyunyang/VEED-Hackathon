@@ -12,17 +12,123 @@ import {
 } from "./ui/tooltip";
 import { Play, Pause, Scissors, Check, ScanFace } from "lucide-react";
 
-const PERSON_COLORS = [
-  "#00FF00", // Bright Green
-  "#FF00FF", // Magenta
-  "#00FFFF", // Cyan
-  "#FFFF00", // Yellow
-  "#FF4500", // OrangeRed
-  "#ADFF2F", // GreenYellow
-];
+/**
+ * Generates a set of colors with high contrast between them and at least 4.6:1 contrast against black.
+ * Uses HSL distribution and relative luminance calculation to ensure accessibility.
+ */
+const getRelativeLuminance = (r: number, g: number, b: number) => {
+  const [rl, gl, bl] = [r, g, b].map((c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+};
 
-const getPersonColor = (id: number) => {
-  return PERSON_COLORS[id % PERSON_COLORS.length];
+const hslToRgb = (h: number, s: number, l: number) => {
+  s /= 100;
+  l /= 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) =>
+    l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [
+    Math.round(255 * f(0)),
+    Math.round(255 * f(8)),
+    Math.round(255 * f(4)),
+  ];
+};
+
+const generateAccessibleColors = (count: number): string[] => {
+  const colors: string[] = [];
+  const minLuminance = 0.18; // Required for ~4.6:1 contrast against black
+
+  for (let i = 0; i < count; i++) {
+    const h = (i * 360) / count;
+    let s = 80; // High saturation for vibrancy
+    let l = 50; // Start at middle lightness
+
+    // Adjust lightness to ensure accessibility against black
+    let [r, g, b] = hslToRgb(h, s, l);
+    while (getRelativeLuminance(r, g, b) < minLuminance && l < 95) {
+      l += 2;
+      [r, g, b] = hslToRgb(h, s, l);
+    }
+
+    colors.push(`rgb(${r}, ${g}, ${b})`);
+  }
+  return colors;
+};
+
+/**
+ * Calculates the bounding box for the video within the canvas, maintaining aspect ratio.
+ */
+interface VideoLayout {
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+}
+
+const calculateVideoLayout = (
+  cw: number,
+  ch: number,
+  vw: number,
+  vh: number,
+): VideoLayout => {
+  if (vw <= 0 || vh <= 0) return { width: 0, height: 0, x: 0, y: 0 };
+
+  const videoRatio = vw / vh;
+  const canvasRatio = cw / ch;
+
+  if (videoRatio > canvasRatio) {
+    const width = cw;
+    const height = cw / videoRatio;
+    return { width, height, x: 0, y: (ch - height) / 2 };
+  } else {
+    const height = ch;
+    const width = ch * videoRatio;
+    return { width, height, x: (cw - width) / 2, y: 0 };
+  }
+};
+
+/**
+ * Draws the video frame to the canvas based on the calculated layout.
+ */
+const drawVideoFrame = (
+  ctx: CanvasRenderingContext2D,
+  video: HTMLVideoElement | HTMLImageElement,
+  cw: number,
+  ch: number,
+  layout: VideoLayout,
+) => {
+  ctx.clearRect(0, 0, cw, ch);
+  ctx.drawImage(video, layout.x, layout.y, layout.width, layout.height);
+};
+
+/**
+ * Draws a person's bounding box and label.
+ */
+const drawPersonOverlay = (
+  ctx: CanvasRenderingContext2D,
+  person: { id: number; label: string; bbox: [number, number, number, number] },
+  layout: VideoLayout,
+  scale: number,
+  color: string,
+) => {
+  const [x1, y1, x2, y2] = person.bbox;
+  const bx = layout.x + x1 * scale;
+  const by = layout.y + y1 * scale;
+  const bw = (x2 - x1) * scale;
+  const bh = (y2 - y1) * scale;
+
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(bx, by, bw, bh);
+
+  // Draw Label
+  ctx.fillStyle = color;
+  ctx.font = "bold 16px Inter, sans-serif";
+  ctx.fillText(`${person.label} (${person.id})`, bx, by - 10);
 };
 
 interface VideoPlayerProps {
@@ -66,14 +172,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const framePeople = (videoData.frames as any)[frameIdx.toString()];
       framePeople.forEach((p: any) => {
         if (!people[p.id]) {
-          // If we haven't seen this person, or we find a better score (up to 1)
           people[p.id] = {
             id: p.id,
             label: p.label,
             bestFrameIndex: frameIdx,
             bbox: p.bbox,
             det_score: p.det_score,
-            color: getPersonColor(p.id),
           };
         } else if (
           people[p.id].det_score < 1 &&
@@ -85,8 +189,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
       });
     });
-    return Object.values(people);
+
+    const peopleArray = Object.values(people);
+    const colors = generateAccessibleColors(peopleArray.length);
+
+    // Sort by ID to ensure stable color assignment if needed,
+    // or just map by index in the object values.
+    return peopleArray.map((p, index) => ({
+      ...p,
+      color: colors[index],
+    }));
   }, []);
+
+  const getPersonColor = React.useCallback(
+    (id: number) => {
+      const person = personMetaData.find((p) => p.id === id);
+      return person?.color || "#FFFFFF";
+    },
+    [personMetaData],
+  );
 
   const thumbnailCanvasesRef = useRef<Record<number, HTMLCanvasElement | null>>(
     {},
@@ -155,6 +276,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
   // Setup canvas drawing loop
   useEffect(() => {
+    console.log("selectedPersonIds", selectedPersonIds);
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
@@ -165,75 +287,44 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     if (!ctx) return;
 
     const renderFrame = () => {
-      if (!video.paused && !video.ended) {
-        const cw = canvas.width;
-        const ch = canvas.height;
-        const vw = video.videoWidth;
-        const vh = video.videoHeight;
+      const layout = calculateVideoLayout(
+        canvas.width,
+        canvas.height,
+        video.videoWidth,
+        video.videoHeight,
+      );
 
-        if (vw > 0 && vh > 0) {
-          const videoRatio = vw / vh;
-          const canvasRatio = cw / ch;
+      if (layout.width > 0) {
+        drawVideoFrame(ctx, video, canvas.width, canvas.height, layout);
 
-          let drawWidth, drawHeight, dx, dy;
+        // DRAW BOUNDING BOXES
+        const fps = videoData.video_metadata.fps;
+        const origW = videoData.video_metadata.width;
+        const currentFrame = Math.floor(video.currentTime * fps);
+        const frameData = (videoData.frames as any)[currentFrame.toString()];
 
-          if (videoRatio > canvasRatio) {
-            drawWidth = cw;
-            drawHeight = cw / videoRatio;
-            dx = 0;
-            dy = (ch - drawHeight) / 2;
-          } else {
-            drawWidth = ch * videoRatio;
-            drawHeight = ch;
-            dx = (cw - drawWidth) / 2;
-            dy = 0;
-          }
-
-          ctx.clearRect(0, 0, cw, ch);
-          ctx.drawImage(video, dx, dy, drawWidth, drawHeight);
-
-          // DRAW BOUNDING BOXES
-          const fps = videoData.video_metadata.fps;
-          const origW = videoData.video_metadata.width;
-          const currentFrame = Math.floor(video.currentTime * fps);
-          const frameData = (videoData.frames as any)[currentFrame.toString()];
-
-          if (frameData) {
-            const scale = drawWidth / origW;
-
-            frameData.forEach((person: any) => {
-              if (
-                (faceControlMode && !selectedPersonIds.includes(person.id)) ||
-                (!faceControlMode &&
-                  appliedSelectedIds.length > 0 &&
-                  !appliedSelectedIds.includes(person.id))
-              ) {
-                return;
-              }
-              const [x1, y1, x2, y2] = person.bbox;
-              const color = getPersonColor(person.id);
-
-              ctx.strokeStyle = color;
-              ctx.lineWidth = 3;
-              ctx.strokeRect(
-                dx + x1 * scale,
-                dy + y1 * scale,
-                (x2 - x1) * scale,
-                (y2 - y1) * scale,
-              );
-
-              // Draw Label
-              ctx.fillStyle = color;
-              ctx.font = "bold 16px Inter, sans-serif";
-              ctx.fillText(
-                `${person.label} (${person.id})`,
-                dx + x1 * scale,
-                dy + y1 * scale - 10,
-              );
-            });
-          }
+        if (frameData) {
+          const scale = layout.width / origW;
+          frameData.forEach((person: any) => {
+            if (
+              (faceControlMode && !selectedPersonIds.includes(person.id)) ||
+              (!faceControlMode &&
+                appliedSelectedIds.length > 0 &&
+                !appliedSelectedIds.includes(person.id))
+            ) {
+              return;
+            }
+            drawPersonOverlay(
+              ctx,
+              person,
+              layout,
+              scale,
+              getPersonColor(person.id),
+            );
+          });
         }
       }
+
       animationFrameId = requestAnimationFrame(renderFrame);
     };
 
@@ -242,7 +333,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [faceControlMode, selectedPersonIds, appliedSelectedIds]);
+  }, [faceControlMode, selectedPersonIds, appliedSelectedIds, getPersonColor]);
 
   // Sync canvas size with parent
   useEffect(() => {
@@ -257,27 +348,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (video && video.videoWidth > 0) {
         const ctx = canvas.getContext("2d");
         if (ctx) {
-          const cw = canvas.width;
-          const ch = canvas.height;
-          const vw = video.videoWidth;
-          const vh = video.videoHeight;
-          const videoRatio = vw / vh;
-          const canvasRatio = cw / ch;
-
-          let drawWidth, drawHeight, dx, dy;
-          if (videoRatio > canvasRatio) {
-            drawWidth = cw;
-            drawHeight = cw / videoRatio;
-            dx = 0;
-            dy = (ch - drawHeight) / 2;
-          } else {
-            drawWidth = ch * videoRatio;
-            drawHeight = ch;
-            dx = (cw - drawWidth) / 2;
-            dy = 0;
-          }
-          ctx.clearRect(0, 0, cw, ch);
-          ctx.drawImage(video, dx, dy, drawWidth, drawHeight);
+          const layout = calculateVideoLayout(
+            canvas.width,
+            canvas.height,
+            video.videoWidth,
+            video.videoHeight,
+          );
+          drawVideoFrame(ctx, video, canvas.width, canvas.height, layout);
         }
       }
     };
@@ -375,12 +452,19 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         await new Promise((resolve) => {
           video.onseeked = resolve;
         });
-        offscreenCtx?.drawImage(
-          video,
-          0,
-          0,
+
+        const layout = calculateVideoLayout(
           offscreenCanvas.width,
           offscreenCanvas.height,
+          video.videoWidth,
+          video.videoHeight,
+        );
+        drawVideoFrame(
+          offscreenCtx!,
+          video,
+          offscreenCanvas.width,
+          offscreenCanvas.height,
+          layout,
         );
         frames.push(offscreenCanvas.toDataURL());
       }
