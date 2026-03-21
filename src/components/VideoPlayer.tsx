@@ -1,4 +1,5 @@
 import React, { useRef, useEffect, useState, useMemo } from "react";
+import { Slider as SliderPrimitive } from "@base-ui/react/slider";
 import videoData from "../assets/insightface_video_data.json";
 import { Button } from "./ui/button";
 import { Slider } from "./ui/slider";
@@ -136,6 +137,58 @@ const drawPersonOverlay = (
   ctx.fillStyle = color;
   ctx.font = "bold 16px Inter, sans-serif";
   ctx.fillText(`${person.label} (${person.id})`, bx, by - 10);
+};
+
+/**
+ * Custom Range Selector with Bracket Handles
+ */
+const RangeBracketSelector = ({
+  value,
+  max,
+  onChange,
+}: {
+  value: [number, number];
+  max: number;
+  onChange: (val: [number, number]) => void;
+}) => {
+  return (
+    <SliderPrimitive.Root
+      value={value}
+      onValueChange={(val) => onChange(val as [number, number])}
+      max={max}
+      min={0}
+      step={0.1}
+      thumbAlignment="center"
+      className="relative w-full h-full flex items-center"
+    >
+      <SliderPrimitive.Control className="relative w-full h-full flex items-center">
+        <SliderPrimitive.Track className="relative w-full h-full">
+          {/* Selected Range Highlight */}
+          <SliderPrimitive.Indicator className="slider-indicator absolute h-full bg-primary/10 border-y-2 border-primary/50 z-10" />
+
+          {/* Left Bracket */}
+          <SliderPrimitive.Thumb
+            index={0}
+            className="slider-thumb-frame absolute top-0 bottom-0 w-4 flex items-center justify-center cursor-ew-resize z-30 outline-none group"
+          >
+            <div className="slider-thumb__left w-full h-full border-l-4 border-y-4 border-primary rounded-l-md transition-all duration-200" />
+            {/* Grab handle dots */}
+            <div className="absolute left-1.5 w-0.5 h-4" />
+          </SliderPrimitive.Thumb>
+
+          {/* Right Bracket */}
+          <SliderPrimitive.Thumb
+            index={1}
+            className="absolute top-0 bottom-0 w-4 flex items-center justify-center cursor-ew-resize z-30 outline-none group"
+          >
+            <div className="slider-thumb__right w-full h-full border-r-4 border-y-4 border-primary rounded-r-md bg-primary/20 group-hover:bg-primary/40 transition-all duration-200" />
+            {/* Grab handle dots */}
+            <div className="absolute right-1.5 w-0.5 h-4 bg-primary/60 rounded-full" />
+          </SliderPrimitive.Thumb>
+        </SliderPrimitive.Track>
+      </SliderPrimitive.Control>
+    </SliderPrimitive.Root>
+  );
 };
 
 interface VideoPlayerProps {
@@ -600,16 +653,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   ))}
 
                   {/* Range Selection Overlay */}
-                  <div className="absolute inset-x-3 inset-y-0 flex items-center">
-                    <Slider
-                      min={0}
+                  <div className="absolute inset-0 flex items-center">
+                    <RangeBracketSelector
                       max={duration}
-                      step={0.1}
                       value={tempSelection}
-                      onValueChange={(val) =>
-                        setTempSelection(val as [number, number])
-                      }
-                      className="w-full z-10"
+                      onChange={(val) => setTempSelection(val)}
                     />
                   </div>
                 </div>

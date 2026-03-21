@@ -13,3 +13,21 @@
 .model-status {
   margin-bottom: calc(env(safe-area-inset-bottom));
 }
+
+.slider-indicator {
+  border: 5px solid rgb(255, 165, 0);
+  border-radius: 10px;
+}
+.slider-thumb {
+  border-radius: 20px;
+}
+
+.slider-thumb__right {
+  border: 3px solid rgb(255, 165, 0);
+  margin-left: 3px;
+}
+
+.slider-thumb__left {
+  border: 3px solid rgb(255, 165, 0);
+  margin-right: 3px;
+}
