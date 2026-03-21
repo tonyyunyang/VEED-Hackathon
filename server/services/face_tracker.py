@@ -4,6 +4,7 @@ import os
 import random
 import subprocess
 import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -25,19 +26,63 @@ TRACKER_DET_THRESH = 0.35
 TRACKER_NMS_THRESH = 0.4
 TRACKER_NUM_BINS = 64
 TRACKER_SHOT_CHANGE_THRESHOLD = 0.4
+TRACKER_FILTER_TRACKS = False
+TRACKER_MIN_TRACK_LENGTH = 10
+TRACKER_MIN_TRACK_MEDIAN_AREA = 2500.0
+TRACKER_FILTER_CONFIDENCE = False
+TRACKER_MIN_CONFIDENCE = 0.5
 TRACKER_USE_SHOT_CHANGE = True
 TRACKER_USE_SHARED_MEMORY = True
 TRACKER_TIMEOUT_SECONDS = 600
 DEFAULT_TRACKER_SIMILARITY_THRESHOLD = 0.4
+FACE_ANALYSIS_DEVICE = "auto"
+FACE_ANALYSIS_DET_SIZE = 640
 
 _app = None
+
+
+@lru_cache(maxsize=1)
+def _available_onnx_providers() -> tuple[str, ...]:
+    try:
+        import onnxruntime as ort
+    except Exception:
+        return ("CPUExecutionProvider",)
+    return tuple(ort.get_available_providers())
+
+
+def _resolve_face_analysis_execution(device: str, detector_size: int) -> tuple[list[str], int]:
+    available = set(_available_onnx_providers())
+
+    if device == "cpu":
+        return ["CPUExecutionProvider"], -1
+    if device == "cuda":
+        if "CUDAExecutionProvider" in available:
+            return ["CUDAExecutionProvider", "CPUExecutionProvider"], 0
+        return ["CPUExecutionProvider"], -1
+
+    if (
+        sys.platform == "darwin"
+        and detector_size == 640
+        and "CoreMLExecutionProvider" in available
+    ):
+        return ["CoreMLExecutionProvider", "CPUExecutionProvider"], 0
+    if "CUDAExecutionProvider" in available:
+        return ["CUDAExecutionProvider", "CPUExecutionProvider"], 0
+    return ["CPUExecutionProvider"], -1
 
 
 def _get_app():
     global _app
     if _app is None:
-        _app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-        _app.prepare(ctx_id=0, det_size=(640, 640))
+        providers, ctx_id = _resolve_face_analysis_execution(
+            FACE_ANALYSIS_DEVICE,
+            FACE_ANALYSIS_DET_SIZE,
+        )
+        _app = FaceAnalysis(name="buffalo_l", providers=providers)
+        _app.prepare(
+            ctx_id=ctx_id,
+            det_size=(FACE_ANALYSIS_DET_SIZE, FACE_ANALYSIS_DET_SIZE),
+        )
     return _app
 
 
@@ -155,6 +200,19 @@ def _build_tracker_command(video_path: str, output_dir: str) -> list[str]:
         command.append("--disable-shot-change")
     if not TRACKER_USE_SHARED_MEMORY:
         command.append("--disable-shared-memory")
+    if TRACKER_FILTER_TRACKS:
+        command.append("--filter-tracks")
+        command.extend(
+            [
+                "--min-track-length",
+                str(TRACKER_MIN_TRACK_LENGTH),
+                "--min-track-median-area",
+                str(TRACKER_MIN_TRACK_MEDIAN_AREA),
+            ]
+        )
+    if TRACKER_FILTER_CONFIDENCE:
+        command.append("--filter-confidence")
+        command.extend(["--min-confidence", str(TRACKER_MIN_CONFIDENCE)])
     return command
 
 

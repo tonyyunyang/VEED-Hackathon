@@ -27,14 +27,17 @@ def test_face_info():
         age=25,
         gender="male",
         frame_count=10,
+        frames={"0": [1.0, 2.0, 3.0, 4.0]},
     )
     assert f.face_id == "face_0"
     assert f.age == 25
+    assert f.frames["0"] == [1.0, 2.0, 3.0, 4.0]
 
 
 def test_detect_faces_response():
     r = DetectFacesResponse(
         video_id="abc",
+        fps=24.0,
         faces=[
             FaceInfo(
                 face_id="face_0",
@@ -46,6 +49,7 @@ def test_detect_faces_response():
         ],
     )
     assert len(r.faces) == 1
+    assert r.fps == 24.0
     assert r.faces[0].gender == "female"
 
 

@@ -19,6 +19,11 @@ from config import (
     TRACKER_DET_SIZE,
     TRACKER_DET_THRESH,
     TRACKER_DEVICE,
+    TRACKER_FILTER_CONFIDENCE,
+    TRACKER_FILTER_TRACKS,
+    TRACKER_MIN_CONFIDENCE,
+    TRACKER_MIN_TRACK_LENGTH,
+    TRACKER_MIN_TRACK_MEDIAN_AREA,
     TRACKER_NMS_THRESH,
     TRACKER_NUM_BINS,
     TRACKER_SHOT_CHANGE_THRESHOLD,
@@ -27,6 +32,7 @@ from config import (
     TRACKER_TYPE,
     TRACKER_USE_SHARED_MEMORY,
     TRACKER_USE_SHOT_CHANGE,
+    FACE_ANALYSIS_DEVICE,
 )
 from services import video, face_tracker, face_swapper
 
@@ -45,9 +51,15 @@ def _configure_face_tracker_backend() -> None:
     face_tracker.TRACKER_NUM_BINS = TRACKER_NUM_BINS
     face_tracker.TRACKER_SHOT_CHANGE_THRESHOLD = TRACKER_SHOT_CHANGE_THRESHOLD
     face_tracker.DEFAULT_TRACKER_SIMILARITY_THRESHOLD = TRACKER_SIMILARITY_THRESHOLD
+    face_tracker.TRACKER_FILTER_TRACKS = TRACKER_FILTER_TRACKS
+    face_tracker.TRACKER_MIN_TRACK_LENGTH = TRACKER_MIN_TRACK_LENGTH
+    face_tracker.TRACKER_MIN_TRACK_MEDIAN_AREA = TRACKER_MIN_TRACK_MEDIAN_AREA
+    face_tracker.TRACKER_FILTER_CONFIDENCE = TRACKER_FILTER_CONFIDENCE
+    face_tracker.TRACKER_MIN_CONFIDENCE = TRACKER_MIN_CONFIDENCE
     face_tracker.TRACKER_USE_SHOT_CHANGE = TRACKER_USE_SHOT_CHANGE
     face_tracker.TRACKER_USE_SHARED_MEMORY = TRACKER_USE_SHARED_MEMORY
     face_tracker.TRACKER_TIMEOUT_SECONDS = TRACKER_TIMEOUT_SECONDS
+    face_tracker.FACE_ANALYSIS_DEVICE = FACE_ANALYSIS_DEVICE
     face_tracker.FRAME_SUBSAMPLE = FRAME_SUBSAMPLE
     face_tracker.DUMMY_TRACKING = DUMMY_TRACKING
 
@@ -129,11 +141,16 @@ async def detect_faces(req: DetectFacesRequest):
             age=fdata["age"],
             gender=fdata["gender"],
             frame_count=fdata["frame_count"],
+            frames=fdata.get("frames", {}),
         )
         for fid, fdata in faces_data["faces"].items()
     ]
 
-    return DetectFacesResponse(video_id=req.video_id, faces=faces_list)
+    return DetectFacesResponse(
+        video_id=req.video_id,
+        fps=video_info["fps"],
+        faces=faces_list,
+    )
 
 
 async def _run_swap_job(job_id: str, video_id: str, face_ids: list[str]):

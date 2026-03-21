@@ -52,6 +52,7 @@ def _mock_tracker_stack(monkeypatch):
                     "age": 34,
                     "gender": "male",
                     "frame_count": 1,
+                    "frames": {"0": [10.0, 10.0, 20.0, 20.0]},
                 }
             }
         }
@@ -118,6 +119,7 @@ def test_upload_and_detect_faces(monkeypatch, isolated_storage):
 
     data = detect_resp.json()
     assert data["video_id"] == video_id
+    assert data["fps"] == 24.0
     assert isinstance(data["faces"], list)
     assert len(data["faces"]) == 1
 
@@ -127,6 +129,7 @@ def test_upload_and_detect_faces(monkeypatch, isolated_storage):
     assert face["age"] == 34
     assert face["gender"] == "male"
     assert face["frame_count"] == 1
+    assert face["frames"] == {"0": [10.0, 10.0, 20.0, 20.0]}
 
     faces_json_path = os.path.join(main.STORAGE_DIR, video_id, "faces.json")
     assert os.path.exists(faces_json_path)

@@ -131,6 +131,59 @@ def test_detect_and_cluster_uses_tracker_cli(monkeypatch, tmp_path):
     assert metadata_calls[1][1] == 4
 
 
+def test_build_tracker_command_includes_optional_filter_flags(monkeypatch):
+    monkeypatch.setattr(face_tracker, "DEFAULT_TRACKER_TYPE", "botfacesort")
+    monkeypatch.setattr(face_tracker, "DEFAULT_TRACKER_DEVICE", "auto")
+    monkeypatch.setattr(face_tracker, "TRACKER_DET_SIZE", 960)
+    monkeypatch.setattr(face_tracker, "TRACKER_DET_THRESH", 0.42)
+    monkeypatch.setattr(face_tracker, "TRACKER_NMS_THRESH", 0.55)
+    monkeypatch.setattr(face_tracker, "TRACKER_NUM_BINS", 32)
+    monkeypatch.setattr(face_tracker, "TRACKER_SHOT_CHANGE_THRESHOLD", 0.7)
+    monkeypatch.setattr(face_tracker, "TRACKER_USE_SHOT_CHANGE", False)
+    monkeypatch.setattr(face_tracker, "TRACKER_USE_SHARED_MEMORY", False)
+    monkeypatch.setattr(face_tracker, "TRACKER_FILTER_TRACKS", True)
+    monkeypatch.setattr(face_tracker, "TRACKER_MIN_TRACK_LENGTH", 12)
+    monkeypatch.setattr(face_tracker, "TRACKER_MIN_TRACK_MEDIAN_AREA", 4096.0)
+    monkeypatch.setattr(face_tracker, "TRACKER_FILTER_CONFIDENCE", True)
+    monkeypatch.setattr(face_tracker, "TRACKER_MIN_CONFIDENCE", 0.65)
+
+    cmd = face_tracker._build_tracker_command("input.mp4", "outdir")
+
+    assert "--tracker" in cmd and "botfacesort" in cmd
+    assert "--device" in cmd and "auto" in cmd
+    assert "--disable-shot-change" in cmd
+    assert "--disable-shared-memory" in cmd
+    assert "--filter-tracks" in cmd
+    assert "--min-track-length" in cmd and "12" in cmd
+    assert "--min-track-median-area" in cmd and "4096.0" in cmd
+    assert "--filter-confidence" in cmd
+    assert "--min-confidence" in cmd and "0.65" in cmd
+
+
+def test_resolve_face_analysis_execution_prefers_coreml_on_mac(monkeypatch):
+    monkeypatch.setattr(face_tracker.sys, "platform", "darwin")
+    monkeypatch.setattr(
+        face_tracker,
+        "_available_onnx_providers",
+        lambda: ("CoreMLExecutionProvider", "CPUExecutionProvider"),
+    )
+
+    providers, ctx_id = face_tracker._resolve_face_analysis_execution("auto", 640)
+
+    assert providers == ["CoreMLExecutionProvider", "CPUExecutionProvider"]
+    assert ctx_id == 0
+
+
+def test_resolve_face_analysis_execution_falls_back_to_cpu(monkeypatch):
+    monkeypatch.setattr(face_tracker.sys, "platform", "linux")
+    monkeypatch.setattr(face_tracker, "_available_onnx_providers", lambda: ("CPUExecutionProvider",))
+
+    providers, ctx_id = face_tracker._resolve_face_analysis_execution("cuda", 640)
+
+    assert providers == ["CPUExecutionProvider"]
+    assert ctx_id == -1
+
+
 def test_extract_face_clips_uses_stored_bboxes(monkeypatch, tmp_path):
     frames_dir = tmp_path / "frames"
     output_dir = tmp_path / "clips"

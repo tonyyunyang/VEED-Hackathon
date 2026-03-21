@@ -2,7 +2,11 @@ import os
 
 from dotenv import load_dotenv
 
-load_dotenv()
+BASE_DIR = os.path.dirname(__file__)
+ROOT_DIR = os.path.dirname(BASE_DIR)
+
+# Prefer the repo-root .env when present, while keeping missing files non-fatal.
+load_dotenv(os.path.join(ROOT_DIR, ".env"))
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -26,7 +30,6 @@ def _env_float(name: str, default: float) -> float:
     return float(value)
 
 
-BASE_DIR = os.path.dirname(__file__)
 STORAGE_DIR = os.path.abspath(os.getenv("STORAGE_DIR", os.path.join(BASE_DIR, "storage")))
 
 TRACKER_BACKEND = (
@@ -40,6 +43,11 @@ TRACKER_NMS_THRESH = _env_float("TRACKER_NMS_THRESH", 0.4)
 TRACKER_NUM_BINS = _env_int("TRACKER_NUM_BINS", 64)
 TRACKER_SHOT_CHANGE_THRESHOLD = _env_float("TRACKER_SHOT_CHANGE_THRESHOLD", 0.4)
 TRACKER_SIMILARITY_THRESHOLD = _env_float("TRACKER_SIMILARITY_THRESHOLD", 0.4)
+TRACKER_FILTER_TRACKS = _env_bool("TRACKER_FILTER_TRACKS", False)
+TRACKER_MIN_TRACK_LENGTH = _env_int("TRACKER_MIN_TRACK_LENGTH", 10)
+TRACKER_MIN_TRACK_MEDIAN_AREA = _env_float("TRACKER_MIN_TRACK_MEDIAN_AREA", 2500.0)
+TRACKER_FILTER_CONFIDENCE = _env_bool("TRACKER_FILTER_CONFIDENCE", False)
+TRACKER_MIN_CONFIDENCE = _env_float("TRACKER_MIN_CONFIDENCE", 0.5)
 TRACKER_USE_SHOT_CHANGE = _env_bool("TRACKER_USE_SHOT_CHANGE", True)
 TRACKER_USE_SHARED_MEMORY = _env_bool("TRACKER_USE_SHARED_MEMORY", True)
 TRACKER_TIMEOUT_SECONDS = _env_int("TRACKER_TIMEOUT_SECONDS", 600)
@@ -47,6 +55,7 @@ TRACKER_FRAME_SUBSAMPLE = _env_int(
     "TRACKER_FRAME_SUBSAMPLE",
     _env_int("FRAME_SUBSAMPLE", 5),
 )
+FACE_ANALYSIS_DEVICE = os.getenv("FACE_ANALYSIS_DEVICE", TRACKER_DEVICE).strip().lower() or "auto"
 FRAME_SUBSAMPLE = TRACKER_FRAME_SUBSAMPLE
 
 ENABLE_LIPSYNC = _env_bool("ENABLE_LIPSYNC", False)

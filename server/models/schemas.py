@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class UploadResponse(BaseModel):
@@ -15,10 +15,12 @@ class FaceInfo(BaseModel):
     age: int
     gender: str
     frame_count: int
+    frames: dict[str, list[float]] = Field(default_factory=dict)
 
 
 class DetectFacesResponse(BaseModel):
     video_id: str
+    fps: float
     faces: list[FaceInfo]
 
 
