@@ -52,14 +52,15 @@ brew install ffmpeg
 ### Backend
 
 ```bash
-conda create -n veed-face-swap python=3.11 -y
-conda activate veed-face-swap
 cd server
-uv sync --python "$(which python)" --all-groups
+uv sync --all-groups
 cd ..
 ```
 
 Notes:
+- conda is optional for local isolation only; the repo does not require conda to run
+- if you want `uv` to manage Python for you, run `uv python install 3.11` once before `uv sync`
+- if you prefer a local conda env, activate it first and then run `uv sync --python "$(which python)" --all-groups`
 - `uv` resolves the local `movie-like-shots` dependency from `face-detect-track/`
 - the synced backend environment lives under `server/.venv`
 - the default tracker backend is `movie_like_shots` with `ocsort`
@@ -100,6 +101,8 @@ You can also run the backend directly without the npm wrapper:
 cd server
 uv run uvicorn main:app --port 8000
 ```
+
+The normal runtime path is `uv` + `server/.venv`; there is no repo-level conda requirement.
 
 ## Testing
 
