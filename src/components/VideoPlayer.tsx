@@ -1,5 +1,4 @@
-import React, { useRef, useEffect, useState, useMemo } from "react";
-import { Slider as SliderPrimitive } from "@base-ui/react/slider";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import demoVideoData from "../assets/insightface_video_data.json";
 import type { BoundingBox, FaceInfo } from "../types";
 import { Button } from "./ui/button";
@@ -226,59 +225,239 @@ const normalizeDemoTrackingData = (): TrackingDataset => ({
   ),
 });
 
-/**
- * Custom Range Selector with Bracket Handles
- */
-const RangeBracketSelector = ({
-  value,
-  max,
-  onChange,
-}: {
-  value: [number, number];
-  max: number;
-  onChange: (val: [number, number]) => void;
-}) => {
+type TimelineDragMode = "start" | "end" | "range" | "playhead";
+
+interface SelectionTimelineEditorProps {
+  currentTime: number;
+  duration: number;
+  keyframes: string[];
+  onScrub: (time: number) => void;
+  onSelectionChange: (selection: [number, number]) => void;
+  selection: [number, number];
+}
+
+const MIN_SELECTION_WINDOW = 0.25;
+
+const SelectionTimelineEditor = ({
+  currentTime,
+  duration,
+  keyframes,
+  onScrub,
+  onSelectionChange,
+  selection,
+}: SelectionTimelineEditorProps) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{
+    initialCurrentTime: number;
+    initialSelection: [number, number];
+    mode: TimelineDragMode;
+    pointerStartTime: number;
+  } | null>(null);
+
+  const clampTime = useCallback(
+    (time: number) => Math.min(duration, Math.max(0, time)),
+    [duration],
+  );
+
+  const positionToTime = useCallback(
+    (clientX: number) => {
+      const bounds = containerRef.current?.getBoundingClientRect();
+      if (!bounds || duration <= 0) return 0;
+      const ratio = Math.min(
+        1,
+        Math.max(0, (clientX - bounds.left) / Math.max(bounds.width, 1)),
+      );
+      return clampTime(ratio * duration);
+    },
+    [clampTime, duration],
+  );
+
+  const updateDrag = useCallback(
+    (clientX: number) => {
+      const drag = dragRef.current;
+      if (!drag) return;
+
+      const pointerTime = positionToTime(clientX);
+      const [initialStart, initialEnd] = drag.initialSelection;
+      const selectionLength = Math.max(
+        MIN_SELECTION_WINDOW,
+        initialEnd - initialStart,
+      );
+
+      switch (drag.mode) {
+        case "start": {
+          const nextStart = Math.max(
+            0,
+            Math.min(pointerTime, initialEnd - MIN_SELECTION_WINDOW),
+          );
+          onSelectionChange([nextStart, initialEnd]);
+          if (drag.initialCurrentTime < nextStart) {
+            onScrub(nextStart);
+          }
+          break;
+        }
+        case "end": {
+          const nextEnd = Math.min(
+            duration,
+            Math.max(pointerTime, initialStart + MIN_SELECTION_WINDOW),
+          );
+          onSelectionChange([initialStart, nextEnd]);
+          if (drag.initialCurrentTime > nextEnd) {
+            onScrub(nextEnd);
+          }
+          break;
+        }
+        case "range": {
+          const delta = pointerTime - drag.pointerStartTime;
+          const maxStart = Math.max(0, duration - selectionLength);
+          const nextStart = Math.min(
+            maxStart,
+            Math.max(0, initialStart + delta),
+          );
+          const nextEnd = Math.min(duration, nextStart + selectionLength);
+          const relativePlayhead = drag.initialCurrentTime - initialStart;
+
+          onSelectionChange([nextStart, nextEnd]);
+          onScrub(
+            Math.min(
+              nextEnd,
+              Math.max(nextStart, nextStart + relativePlayhead),
+            ),
+          );
+          break;
+        }
+        case "playhead": {
+          onScrub(
+            Math.min(selection[1], Math.max(selection[0], pointerTime)),
+          );
+          break;
+        }
+      }
+    },
+    [duration, onScrub, onSelectionChange, positionToTime, selection],
+  );
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!dragRef.current) return;
+      updateDrag(event.clientX);
+    };
+
+    const handlePointerUp = () => {
+      dragRef.current = null;
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [updateDrag]);
+
+  const startDrag =
+    (mode: TimelineDragMode) => (event: React.PointerEvent<HTMLDivElement>) => {
+      event.preventDefault();
+      event.stopPropagation();
+      dragRef.current = {
+        initialCurrentTime: currentTime,
+        initialSelection: selection,
+        mode,
+        pointerStartTime: positionToTime(event.clientX),
+      };
+    };
+
+  const handleTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (duration <= 0) return;
+
+    event.preventDefault();
+    const pointerTime = positionToTime(event.clientX);
+    onScrub(Math.min(selection[1], Math.max(selection[0], pointerTime)));
+    dragRef.current = {
+      initialCurrentTime: currentTime,
+      initialSelection: selection,
+      mode: "playhead",
+      pointerStartTime: pointerTime,
+    };
+  };
+
+  const selectionStartPercent = duration > 0 ? (selection[0] / duration) * 100 : 0;
+  const selectionEndPercent = duration > 0 ? (selection[1] / duration) * 100 : 100;
+  const selectionWidthPercent = Math.max(
+    0,
+    selectionEndPercent - selectionStartPercent,
+  );
+  const playheadPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+
   return (
-    <SliderPrimitive.Root
-      value={value}
-      onValueChange={(val) => onChange(val as [number, number])}
-      max={max}
-      min={0}
-      step={0.01}
-      thumbAlignment="center"
-      className="pointer-events-none relative flex h-full w-full items-center"
+    <div
+      ref={containerRef}
+      data-selection-track="true"
+      className="relative h-24 w-full select-none overflow-hidden rounded-[26px] border border-slate-200 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(243,247,255,0.94))] p-2 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] touch-none"
+      onPointerDown={handleTrackPointerDown}
     >
-      <SliderPrimitive.Control className="pointer-events-none relative flex h-full w-full items-center">
-        <SliderPrimitive.Track className="pointer-events-none relative h-full w-full">
-          {/* Selected Range Highlight */}
-          <SliderPrimitive.Indicator className="slider-indicator absolute h-full bg-primary/10 border-y-2 border-primary/50 z-10" />
+      <div className="absolute inset-2 flex gap-1.5 overflow-hidden rounded-[18px]">
+        {keyframes.map((src, index) => (
+          <div key={index} className="relative h-full flex-1 overflow-hidden rounded-[14px]">
+            <img
+              src={src}
+              className="h-full w-full object-cover saturate-[0.92]"
+              alt={`Keyframe ${index}`}
+            />
+          </div>
+        ))}
+      </div>
 
-          {/* Left Bracket */}
-          <SliderPrimitive.Thumb
-            index={0}
-            data-selection-handle="true"
-            onPointerDownCapture={(event) => event.stopPropagation()}
-            className="slider-thumb-frame pointer-events-auto absolute top-0 bottom-0 z-30 flex w-6 touch-none items-center justify-center cursor-ew-resize outline-none group"
-          >
-            <div className="slider-thumb__left h-full w-4 rounded-l-md border-l-4 border-y-4 border-primary transition-all duration-200" />
-            {/* Grab handle dots */}
-            <div className="absolute left-2 h-5 w-0.5 rounded-full bg-primary/65" />
-          </SliderPrimitive.Thumb>
+      <div className="pointer-events-none absolute inset-2">
+        <div
+          className="absolute inset-y-0 left-0 rounded-[18px] bg-slate-950/46"
+          style={{ width: `${selectionStartPercent}%` }}
+        />
+        <div
+          className="absolute inset-y-0 right-0 rounded-[18px] bg-slate-950/46"
+          style={{ width: `${Math.max(0, 100 - selectionEndPercent)}%` }}
+        />
+      </div>
 
-          {/* Right Bracket */}
-          <SliderPrimitive.Thumb
-            index={1}
-            data-selection-handle="true"
-            onPointerDownCapture={(event) => event.stopPropagation()}
-            className="pointer-events-auto absolute top-0 bottom-0 z-30 flex w-6 touch-none items-center justify-center cursor-ew-resize outline-none group"
+      <div className="absolute inset-2">
+        <div
+          data-selection-range="true"
+          className="absolute inset-y-0 z-10 rounded-[18px] border border-lime-300/90 bg-[linear-gradient(180deg,rgba(180,255,120,0.18),rgba(255,255,255,0.06))] shadow-[0_18px_40px_rgba(157,255,116,0.18)]"
+          style={{
+            left: `${selectionStartPercent}%`,
+            width: `${selectionWidthPercent}%`,
+          }}
+          onPointerDown={startDrag("range")}
+        >
+          <div className="absolute inset-0 rounded-[18px] bg-white/6" />
+          <div
+            data-selection-handle="start"
+            className="absolute inset-y-0 left-0 z-20 flex w-5 -translate-x-1/2 cursor-ew-resize items-center justify-center"
+            onPointerDown={startDrag("start")}
           >
-            <div className="slider-thumb__right h-full w-4 rounded-r-md border-r-4 border-y-4 border-primary bg-primary/20 transition-all duration-200 group-hover:bg-primary/40" />
-            {/* Grab handle dots */}
-            <div className="absolute right-2 h-5 w-0.5 rounded-full bg-primary/65" />
-          </SliderPrimitive.Thumb>
-        </SliderPrimitive.Track>
-      </SliderPrimitive.Control>
-    </SliderPrimitive.Root>
+            <div className="h-[78%] w-3 rounded-full border border-lime-200 bg-lime-100 shadow-[0_8px_16px_rgba(157,255,116,0.26)]" />
+          </div>
+          <div
+            data-selection-handle="end"
+            className="absolute inset-y-0 right-0 z-20 flex w-5 translate-x-1/2 cursor-ew-resize items-center justify-center"
+            onPointerDown={startDrag("end")}
+          >
+            <div className="h-[78%] w-3 rounded-full border border-lime-200 bg-lime-100 shadow-[0_8px_16px_rgba(157,255,116,0.26)]" />
+          </div>
+        </div>
+
+        <div
+          data-selection-playhead="true"
+          className="absolute inset-y-[-6px] z-30 w-8 -translate-x-1/2 cursor-ew-resize"
+          style={{ left: `${playheadPercent}%` }}
+          onPointerDown={startDrag("playhead")}
+        >
+          <div className="absolute bottom-0 left-1/2 top-0 w-0.5 -translate-x-1/2 rounded-full bg-slate-950 shadow-[0_0_0_1px_rgba(255,255,255,0.3)]" />
+          <div className="absolute left-1/2 top-0 h-4 w-4 -translate-x-1/2 rounded-full border border-white/70 bg-slate-950 shadow-[0_10px_20px_rgba(15,23,42,0.18)]" />
+          <div className="absolute bottom-0 left-1/2 h-4 w-4 -translate-x-1/2 rounded-full border border-white/70 bg-slate-950 shadow-[0_10px_20px_rgba(15,23,42,0.18)]" />
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -312,7 +491,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     startX: number;
     startY: number;
   } | null>(null);
-  const selectionTimelineRef = useRef<HTMLDivElement>(null);
 
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -349,8 +527,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     tempSelection[1],
     Math.max(tempSelection[0], currentTime),
   );
-  const selectionProgress =
-    duration > 0 ? Math.min(1, Math.max(0, selectionCurrentTime / duration)) : 0;
   const trackingFps = Math.max(trackingData.video_metadata.fps, 1);
   const clipStartFrame = Math.floor(startTime * trackingFps);
   const clipEndFrame = Math.ceil(endTime * trackingFps);
@@ -435,7 +611,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     visiblePersonMetaData.length > 0 &&
     selectedPersonIds.length === visiblePersonMetaData.length;
 
-  const getPersonColor = React.useCallback(
+  const getPersonColor = useCallback(
     (id: PersonId) => {
       const person = personMetaData.find((p) => p.id === id);
       return person?.color || "#FFFFFF";
@@ -880,26 +1056,20 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setCurrentTime(nextTime);
   };
 
-  const handleSelectionTimelinePointer = (
-    event: React.PointerEvent<HTMLDivElement>,
-  ) => {
-    if (
-      event.target instanceof HTMLElement &&
-      event.target.closest("[data-selection-handle='true']")
-    ) {
-      return;
-    }
-
-    const bounds = selectionTimelineRef.current?.getBoundingClientRect();
-    if (!bounds) return;
-
-    const ratio = Math.min(
-      1,
-      Math.max(0, (event.clientX - bounds.left) / Math.max(1, bounds.width)),
-    );
-    const nextTime = duration * ratio;
-    seekToTime(Math.min(tempSelection[1], Math.max(tempSelection[0], nextTime)));
-  };
+  const handleTempSelectionChange = useCallback(
+    (nextSelection: [number, number]) => {
+      const nextStart = Math.min(
+        Math.max(0, nextSelection[0]),
+        Math.max(0, duration - MIN_SELECTION_WINDOW),
+      );
+      const nextEnd = Math.min(
+        duration,
+        Math.max(nextSelection[1], nextStart + MIN_SELECTION_WINDOW),
+      );
+      setTempSelection([nextStart, nextEnd]);
+    },
+    [duration],
+  );
 
   // Scene Selection Mode: Generate Keyframes
   const enterSelectionMode = async () => {
@@ -966,7 +1136,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   ).length;
 
   return (
-    <div className="relative h-screen w-full overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(167,255,124,0.18),_transparent_24%),radial-gradient(circle_at_top_right,_rgba(122,87,255,0.2),_transparent_28%),radial-gradient(circle_at_bottom_left,_rgba(255,111,97,0.14),_transparent_26%),linear-gradient(180deg,_#050816_0%,_#0a1020_100%)] text-white">
+    <div className="relative h-screen w-full overflow-hidden bg-[radial-gradient(circle_at_top_left,_rgba(169,255,131,0.18),transparent_24%),radial-gradient(circle_at_top_right,_rgba(99,142,255,0.16),transparent_26%),radial-gradient(circle_at_bottom_left,_rgba(255,177,120,0.16),transparent_24%),linear-gradient(180deg,_#f9fbf7_0%,_#f2f6ff_54%,_#edf2ff_100%)] text-slate-900">
       <video
         ref={videoRef}
         src={videoSrc}
@@ -984,26 +1154,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       />
 
       {error && (
-        <div className="absolute top-6 left-1/2 z-30 w-full max-w-xl -translate-x-1/2 px-4">
-          <div className="rounded-2xl border border-red-500/30 bg-red-500/15 px-4 py-3 text-center text-sm font-medium text-red-100 backdrop-blur-md">
+        <div className="absolute left-1/2 top-6 z-30 w-full max-w-xl -translate-x-1/2 px-4">
+          <div className="rounded-2xl border border-red-200 bg-red-50/92 px-4 py-3 text-center text-sm font-medium text-red-700 shadow-[0_18px_40px_rgba(239,68,68,0.10)] backdrop-blur-md">
             {error}
           </div>
         </div>
       )}
 
-      <div className="relative z-10 flex h-full flex-col px-5 py-5 md:px-8 md:py-7">
-        <div className="flex items-start justify-between gap-4">
-          <div className="max-w-xl rounded-3xl border border-white/10 bg-white/6 px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.35)] backdrop-blur-xl">
-            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-white/55">
+      <div className="relative z-10 flex h-full flex-col px-4 py-4 md:px-6 md:py-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="max-w-2xl rounded-[32px] border border-white/75 bg-white/72 px-5 py-4 shadow-[0_28px_90px_rgba(15,23,42,0.10)] backdrop-blur-2xl">
+            <div className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">
               <Film className="h-3.5 w-3.5" />
               Editor
             </div>
-            <h2 className="text-xl font-semibold tracking-tight text-white">
+            <h2 className="text-xl font-black tracking-tight text-slate-950">
               {useLiveTracking
                 ? "Review detection before swapping"
                 : "Preview tracked faces"}
             </h2>
-            <p className="mt-1 text-sm text-white/60">
+            <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">
               {useLiveTracking
                 ? "Pause, trim, and choose faces from the same editor before starting the backend swap."
                 : "Demo mode uses the bundled sample tracking data and editor controls."}
@@ -1012,43 +1182,48 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-xs font-medium text-white/70 backdrop-blur-md">
+            <div className="rounded-full border border-white/75 bg-white/70 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-[0_12px_24px_rgba(15,23,42,0.06)] backdrop-blur-md">
               {useLiveTracking ? "Live detection" : "Demo preview"}
             </div>
-            <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-xs font-medium text-white/70 backdrop-blur-md">
+            <div className="rounded-full border border-white/75 bg-white/70 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-[0_12px_24px_rgba(15,23,42,0.06)] backdrop-blur-md">
               {visiblePersonMetaData.length} faces in clip
             </div>
-            <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-xs font-medium text-white/70 backdrop-blur-md">
+            <div className="rounded-full border border-white/75 bg-white/70 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-[0_12px_24px_rgba(15,23,42,0.06)] backdrop-blur-md">
               clip {activeDuration.toFixed(2)}s
             </div>
             {useLiveTracking && (
-              <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-xs font-medium text-white/70 backdrop-blur-md">
+              <div className="rounded-full border border-white/75 bg-white/70 px-3 py-1.5 text-xs font-semibold text-slate-600 shadow-[0_12px_24px_rgba(15,23,42,0.06)] backdrop-blur-md">
                 {appliedFaceCount} faces selected
               </div>
             )}
           </div>
         </div>
 
-        <div className="flex flex-1 items-center justify-center py-6 md:py-8">
-          <div
-            ref={stageRef}
-            className="relative aspect-video w-full max-w-[980px] overflow-hidden rounded-[32px] border border-white/10 bg-black/75 shadow-[0_40px_120px_rgba(0,0,0,0.5)] ring-1 ring-white/5"
-            style={{ width: "min(70vw, 980px)", maxHeight: "68vh" }}
-          >
-            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.04),transparent_22%,transparent_78%,rgba(255,255,255,0.04))]" />
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/35 to-transparent" />
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/55 to-transparent" />
-            <canvas
-              ref={canvasRef}
-              className="block h-full w-full"
-            />
+        <div className="flex min-h-0 flex-1 flex-col justify-center gap-4 py-4 md:gap-5 md:py-5">
+          <div className="flex min-h-0 flex-1 items-center justify-center">
+            <div
+              ref={stageRef}
+              data-stage-shell="true"
+              className="relative aspect-video w-full max-w-[1120px] overflow-hidden rounded-[34px] border border-white/75 bg-slate-950 shadow-[0_40px_120px_rgba(15,23,42,0.24)] ring-1 ring-black/5"
+              style={{
+                width: "min(84vw, 1120px)",
+                maxHeight: selectionMode ? "54vh" : "64vh",
+              }}
+            >
+              <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),transparent_18%,transparent_82%,rgba(255,255,255,0.05))]" />
+              <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/24 to-transparent" />
+              <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/44 to-transparent" />
+              <canvas
+                ref={canvasRef}
+                className="block h-full w-full"
+              />
+            </div>
           </div>
         </div>
-      </div>
 
       {faceControlMode && (
         <div
-          className="absolute z-30 w-[360px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-[28px] border border-white/10 bg-slate-950/90 shadow-[0_32px_90px_rgba(0,0,0,0.55)] backdrop-blur-2xl"
+          className="absolute z-30 w-[360px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-[28px] border border-white/80 bg-white/84 shadow-[0_32px_90px_rgba(15,23,42,0.16)] backdrop-blur-2xl"
           style={{
             left: facePanelPosition.x,
             top: facePanelPosition.y,
@@ -1056,21 +1231,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         >
           <div
             onPointerDown={handleFacePanelPointerDown}
-            className="flex cursor-move items-center justify-between border-b border-white/10 px-4 py-3"
+            className="flex cursor-move items-center justify-between border-b border-slate-200 px-4 py-3"
           >
-            <div className="flex items-center gap-2 text-sm font-semibold text-white">
-              <GripHorizontal className="h-4 w-4 text-white/45" />
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+              <GripHorizontal className="h-4 w-4 text-slate-400" />
               Face picker
             </div>
             <button
               onClick={() => setFaceControlMode(false)}
-              className="rounded-full p-1.5 text-white/55 transition-colors hover:bg-white/10 hover:text-white"
+              className="rounded-full p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
 
-          <div className="flex items-center justify-between px-4 py-3 text-xs text-white/55">
+          <div className="flex items-center justify-between px-4 py-3 text-xs text-slate-500">
             <span>
               Click faces to include them in the swap.
             </span>
@@ -1079,10 +1254,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           <div className="max-h-[52vh] overflow-y-auto px-4 pb-4">
             {visiblePersonMetaData.length === 0 ? (
-              <div className="rounded-2xl border border-white/10 bg-white/5 px-4 py-10 text-center text-sm text-white/55">
-                No tracked faces overlap this trimmed range.
-              </div>
-            ) : (
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+                    No tracked faces overlap this trimmed range.
+                  </div>
+                ) : (
               <div className="grid grid-cols-3 gap-3">
                 {visiblePersonMetaData.map((person) => {
                   const isSelected = selectedPersonIds.includes(person.id);
@@ -1095,8 +1270,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       <div
                         className={`relative overflow-hidden rounded-2xl border-2 transition-all ${
                           isSelected
-                            ? "scale-[1.02] shadow-[0_10px_30px_rgba(0,0,0,0.25)]"
-                            : "border-white/10 opacity-70 hover:opacity-100"
+                            ? "scale-[1.02] shadow-[0_12px_32px_rgba(15,23,42,0.14)]"
+                            : "border-slate-200 opacity-72 hover:opacity-100"
                         }`}
                         style={{
                           borderColor: isSelected ? person.color : undefined,
@@ -1105,7 +1280,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             : undefined,
                         }}
                       >
-                        <div className="aspect-square bg-black">
+                        <div className="aspect-square bg-slate-950">
                           {person.thumbnailSrc ? (
                             <img
                               src={person.thumbnailSrc}
@@ -1139,7 +1314,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           </div>
                         </div>
                         {isSelected && (
-                          <div className="absolute right-2 top-2 rounded-full bg-slate-900/85 p-1 text-white shadow-lg">
+                          <div className="absolute right-2 top-2 rounded-full bg-slate-950 p-1 text-white shadow-lg">
                             <Check className="h-3.5 w-3.5" />
                           </div>
                         )}
@@ -1151,18 +1326,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </div>
 
-          <div className="flex items-center justify-between border-t border-white/10 px-4 py-3">
+          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
             <div className="flex w-full items-center justify-between gap-3">
               <Button
                 variant="ghost"
                 size="sm"
                 onClick={handleSelectAllFaces}
                 disabled={visiblePersonMetaData.length === 0}
-                className="text-white/65 hover:bg-white/8 hover:text-white"
+                className="text-slate-600 hover:bg-slate-100 hover:text-slate-900"
               >
                 {allVisibleFacesSelected ? "Deselect all" : "Select all"}
               </Button>
-              <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-white/50">
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
                 Selection updates live
               </div>
             </div>
@@ -1171,23 +1346,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       )}
 
       <div
-        className={`absolute bottom-6 left-1/2 z-20 w-full -translate-x-1/2 px-4 ${
-          selectionMode ? "max-w-4xl" : "max-w-5xl"
+        className={`mx-auto mt-auto w-full shrink-0 px-2 ${
+          selectionMode ? "max-w-6xl" : "max-w-5xl"
         }`}
       >
         <TooltipProvider>
           <Toolbar
-            className="rounded-[28px] border border-white/10 bg-slate-950/78 p-4 shadow-[0_30px_90px_rgba(0,0,0,0.45)] backdrop-blur-2xl"
+            className="rounded-[30px] border border-white/80 bg-white/80 p-4 shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur-2xl"
           >
             {selectionMode ? (
               <div className="flex flex-col gap-6 w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
                 <div className="flex justify-between items-center">
                   <div>
-                    <h3 className="text-lg font-semibold text-white">
+                    <h3 className="text-lg font-black text-slate-950">
                       Edit timeframe
                     </h3>
-                    <p className="mt-1 text-sm text-white/55">
-                      Drag the brackets, then preview only the selected part before applying it.
+                    <p className="mt-1 text-sm text-slate-600">
+                      Drag the handles to resize the range, drag the highlighted
+                      band to move the whole selection, or scrub the playhead for
+                      frame-accurate preview.
                     </p>
                   </div>
                   <div className="flex items-center gap-3">
@@ -1195,7 +1372,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       size="sm"
                       variant="secondary"
                       onClick={togglePlay}
-                      className="bg-white/8 text-white hover:bg-white/14"
+                      className="border border-slate-200 bg-white text-slate-900 hover:bg-slate-50"
                     >
                       {playing ? (
                         <Pause className="mr-2 h-4 w-4" />
@@ -1204,92 +1381,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       )}
                       Preview selection
                     </Button>
-                    <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-sm font-mono font-semibold text-white/80">
+                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-mono font-semibold text-slate-700">
                       {Math.max(0, currentTime - tempSelection[0]).toFixed(2)}s
-                      <span className="mx-1 text-white/35">/</span>
+                      <span className="mx-1 text-slate-300">/</span>
                       {(tempSelection[1] - tempSelection[0]).toFixed(2)}s
                     </div>
                   </div>
                 </div>
 
-                <div
-                  ref={selectionTimelineRef}
-                  className="relative h-20 w-full select-none overflow-hidden rounded-xl border border-white/5 bg-muted/30 p-1.5 touch-none"
-                  onPointerDown={(event) => {
-                    event.preventDefault();
-                    event.currentTarget.setPointerCapture(event.pointerId);
-                    handleSelectionTimelinePointer(event);
-                  }}
-                  onPointerMove={(event) => {
-                    if (event.buttons === 1) {
-                      handleSelectionTimelinePointer(event);
-                    }
-                  }}
-                >
-                  <div className="flex h-full gap-1">
-                    {keyframes.map((src, i) => (
-                      <div key={i} className="relative h-full flex-1">
-                        <img
-                          src={src}
-                          className="h-full w-full rounded-sm object-cover shadow-sm grayscale group-hover:grayscale-0 transition-all duration-300"
-                          alt={`Keyframe ${i}`}
-                        />
-                        <div
-                          className={`absolute inset-0 bg-black/50 transition-opacity duration-300 ${
-                            (i / keyframes.length) * duration <
-                              tempSelection[0] ||
-                            ((i + 1) / keyframes.length) * duration >
-                              tempSelection[1]
-                              ? "opacity-100"
-                              : "opacity-0"
-                          }`}
-                        />
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="absolute inset-0 flex items-center">
-                    <RangeBracketSelector
-                      max={duration}
-                      value={tempSelection}
-                      onChange={(val) => setTempSelection(val)}
-                    />
-                  </div>
-
-                  <div
-                    className="absolute inset-y-0 z-20 w-8 -translate-x-1/2 cursor-ew-resize touch-none"
-                    style={{ left: `${selectionProgress * 100}%` }}
-                    onPointerDown={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      event.currentTarget.setPointerCapture(event.pointerId);
-                      handleSelectionTimelinePointer(event);
-                    }}
-                    onPointerMove={(event) => {
-                      if (event.buttons === 1) {
-                        handleSelectionTimelinePointer(event);
-                      }
-                    }}
-                  >
-                    <div className="absolute inset-y-1 left-1/2 w-0.5 -translate-x-1/2 rounded-full bg-white shadow-[0_0_0_1px_rgba(255,255,255,0.14),0_0_24px_rgba(255,255,255,0.22)]" />
-                    <div className="absolute left-1/2 top-0 h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-white/20 bg-white shadow-lg" />
-                    <div className="absolute left-1/2 bottom-0 h-3.5 w-3.5 -translate-x-1/2 translate-y-1/2 rounded-full border border-white/20 bg-white shadow-lg" />
-                  </div>
-                </div>
+                <SelectionTimelineEditor
+                  currentTime={selectionCurrentTime}
+                  duration={duration}
+                  keyframes={keyframes}
+                  onScrub={seekToTime}
+                  onSelectionChange={handleTempSelectionChange}
+                  selection={tempSelection}
+                />
 
                 <div className="space-y-3">
                   <div className="flex items-center justify-between gap-3">
-                    <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-xs font-medium text-white/65">
+                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
                       Range {tempSelection[0].toFixed(2)}s — {tempSelection[1].toFixed(2)}s
                     </div>
-                    <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-xs font-medium text-white/65">
+                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
                       Preview {Math.max(0, currentTime - tempSelection[0]).toFixed(2)}s / {selectionDuration.toFixed(2)}s
                     </div>
                   </div>
 
                   <div className="flex items-center justify-between gap-3">
-                    <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1.5 text-xs font-medium text-white/65">
-                      Drag the white playhead within the selected range to preview frame-by-frame. Press space to play or pause from anywhere.
+                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
+                      The selected band is draggable now. Playhead scrubbing and
+                      range movement are handled separately so they no longer
+                      fight each other.
                     </div>
                     <div className="flex items-center gap-3">
                       <Button
@@ -1300,14 +1423,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           setPlaying(false);
                           videoRef.current?.pause();
                         }}
-                        className="text-white/65 hover:bg-white/8 hover:text-white"
+                        className="text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                       >
                         Discard
                       </Button>
                       <Button
                         size="sm"
                         onClick={applySelection}
-                        className="bg-white text-slate-950 hover:bg-white/90"
+                        className="bg-slate-950 text-white hover:bg-slate-900"
                       >
                         <Check className="w-4 h-4 mr-2" />
                         Accept Selection
@@ -1336,7 +1459,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         variant="ghost"
                         size="sm"
                         onClick={onBack}
-                        className="h-8 text-white/80 hover:bg-white/8 hover:text-white"
+                        className="h-8 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
                       >
                         Back
                       </Button>
@@ -1348,7 +1471,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             size="icon"
                             variant="ghost"
                             onClick={togglePlay}
-                            className="h-10 w-10 text-white hover:bg-white/8"
+                            className="h-10 w-10 text-slate-700 hover:bg-slate-100"
                           >
                             {playing ? (
                               <Pause className="w-5 h-5 fill-current" />
@@ -1361,9 +1484,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       <TooltipPopup>{playing ? "Pause" : "Play"}</TooltipPopup>
                     </Tooltip>
 
-                    <div className="rounded-full border border-white/10 bg-white/6 px-3 py-1 text-sm font-medium font-mono tabular-nums text-white/80">
+                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm font-medium font-mono tabular-nums text-slate-700">
                       {relativeCurrentTime.toFixed(2)}{" "}
-                      <span className="mx-1 text-white/35">/</span>{" "}
+                      <span className="mx-1 text-slate-300">/</span>{" "}
                       {activeDuration.toFixed(2)}s
                     </div>
                   </ToolbarGroup>
@@ -1372,23 +1495,23 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                     <ToggleGroup
                       value={[playbackRate.toString()]}
                       onValueChange={changeSpeed}
-                      className="rounded-xl border border-white/10 bg-white/6 p-1"
+                      className="rounded-xl border border-slate-200 bg-slate-50 p-1"
                     >
                       <Toggle
                         value="0.5"
-                        className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-white/62 transition-all hover:text-white data-[pressed]:border-white/15 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
+                        className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-slate-500 transition-all hover:text-slate-900 data-[pressed]:border-slate-200 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
                       >
                         0.5x
                       </Toggle>
                       <Toggle
                         value="1"
-                        className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-white/62 transition-all hover:text-white data-[pressed]:border-white/15 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
+                        className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-slate-500 transition-all hover:text-slate-900 data-[pressed]:border-slate-200 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
                       >
                         1.0x
                       </Toggle>
                       <Toggle
                         value="2"
-                        className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-white/62 transition-all hover:text-white data-[pressed]:border-white/15 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
+                        className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-slate-500 transition-all hover:text-slate-900 data-[pressed]:border-slate-200 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
                       >
                         2x
                       </Toggle>
@@ -1400,7 +1523,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           <Button
                             size="sm"
                             onClick={enterSelectionMode}
-                            className="h-9 px-4 font-semibold text-white shadow-sm transition-all active:scale-95 hover:bg-white/8"
+                            className="h-9 border border-slate-200 bg-white px-4 font-semibold text-slate-900 shadow-sm transition-all hover:bg-slate-50 active:scale-95"
                           >
                             <Scissors className="w-4 h-4 mr-2" />
                             Timeframe
@@ -1416,8 +1539,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                           <Button
                             size="sm"
                             onClick={enterFaceControlMode}
-                            className={`h-9 px-4 font-semibold text-white shadow-sm transition-all active:scale-95 hover:bg-white/8 ${
-                              faceControlMode ? "bg-white/12" : ""
+                            className={`h-9 border border-slate-200 bg-white px-4 font-semibold text-slate-900 shadow-sm transition-all hover:bg-slate-50 active:scale-95 ${
+                              faceControlMode ? "ring-2 ring-lime-200" : ""
                             }`}
                           >
                             <ScanFace className="w-4 h-4 mr-2" />
@@ -1435,7 +1558,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             size="sm"
                             onClick={handleFaceSwap}
                             disabled={isSwapping}
-                            className="h-9 px-4 bg-white font-semibold text-slate-950 shadow-sm transition-all active:scale-95 hover:bg-white/90 disabled:bg-white/45"
+                            className="h-9 bg-slate-950 px-4 font-semibold text-white shadow-sm transition-all hover:bg-slate-900 active:scale-95 disabled:bg-slate-300"
                           >
                             <SmilePlus className="w-4 h-4 mr-2" />
                             {onSwap
@@ -1460,6 +1583,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
             )}
           </Toolbar>
         </TooltipProvider>
+      </div>
       </div>
     </div>
   );

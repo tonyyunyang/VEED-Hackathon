@@ -1,114 +1,85 @@
-import type { ReactNode } from "react";
+import veedLogo from "../assets/brand/veed.png";
+import lovableLogo from "../assets/brand/lovable.png";
+import runwareLogo from "../assets/brand/runware.png";
 
 interface PartnerStripProps {
   compact?: boolean;
   className?: string;
 }
 
-interface LogoProps {
+interface PartnerBadgeProps {
+  accent: string;
   compact?: boolean;
+  label: string;
+  logoSrc: string;
+  name: string;
 }
 
-function VeedLogo({ compact = false }: LogoProps) {
-  return (
-    <div
-      className={`inline-flex items-center justify-center overflow-hidden rounded-[28px] border border-lime-200/65 bg-[linear-gradient(135deg,#9fff7b_0%,#b7ff80_46%,#95ffbd_100%)] text-slate-950 shadow-[0_18px_36px_rgba(156,255,116,0.28)] ${
-        compact ? "h-11 px-4" : "h-14 px-5"
-      }`}
-    >
-      <span
-        className={`font-black tracking-[0.24em] text-slate-950 ${
-          compact ? "text-sm" : "text-base"
-        }`}
-      >
-        VEED
-      </span>
-    </div>
-  );
-}
-
-function LovableLogo({ compact = false }: LogoProps) {
-  const size = compact ? 34 : 40;
-
-  return (
-    <div
-      className="inline-flex items-center justify-center rounded-[24px] shadow-[0_18px_36px_rgba(255,92,139,0.22)]"
-      style={{ width: size, height: size }}
-    >
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 64 64"
-        fill="none"
-        aria-hidden="true"
-      >
-        <defs>
-          <linearGradient id="lovableGradient" x1="6" y1="8" x2="58" y2="58">
-            <stop offset="0%" stopColor="#ff8a00" />
-            <stop offset="35%" stopColor="#ff4f6f" />
-            <stop offset="70%" stopColor="#b660ff" />
-            <stop offset="100%" stopColor="#4c78ff" />
-          </linearGradient>
-        </defs>
-        <path
-          d="M20 10C28.5 10 34 15.7 34 23.8C34 15.7 39.5 10 48 10C57.9 10 64 17.2 64 26.9C64 42.9 49.6 54 34 54C18.4 54 4 42.9 4 26.9C4 17.2 10.1 10 20 10Z"
-          fill="url(#lovableGradient)"
-        />
-      </svg>
-    </div>
-  );
-}
-
-function RunwareLogo({ compact = false }: LogoProps) {
-  const size = compact ? 34 : 40;
-
-  return (
-    <div
-      className="inline-flex items-center justify-center rounded-[20px] shadow-[0_18px_36px_rgba(120,86,255,0.22)]"
-      style={{ width: size, height: size }}
-    >
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 64 64"
-        fill="none"
-        aria-hidden="true"
-      >
-        <rect width="64" height="64" rx="18" fill="#7A57FF" />
-        <path
-          d="M19 18H44L50 32L44 46L50 58H39L34 47L25 47L20 36H31L35 44H39L35 36L41 26L38 18H19Z"
-          fill="white"
-        />
-      </svg>
-    </div>
-  );
-}
+const PARTNERS = [
+  {
+    label: "Hosted by",
+    name: "VEED",
+    logoSrc: veedLogo,
+    accent:
+      "radial-gradient(circle at top left, rgba(161,255,116,0.34), rgba(161,255,116,0) 60%)",
+  },
+  {
+    label: "Supported by",
+    name: "Lovable",
+    logoSrc: lovableLogo,
+    accent:
+      "radial-gradient(circle at top left, rgba(255,142,87,0.26), rgba(255,142,87,0) 60%)",
+  },
+  {
+    label: "Supported by",
+    name: "Runware",
+    logoSrc: runwareLogo,
+    accent:
+      "radial-gradient(circle at top left, rgba(122,87,255,0.24), rgba(122,87,255,0) 60%)",
+  },
+];
 
 function PartnerBadge({
-  label,
-  logo,
-  name,
+  accent,
   compact = false,
-}: {
-  label: string;
-  logo: ReactNode;
-  name: string;
-  compact?: boolean;
-}) {
+  label,
+  logoSrc,
+  name,
+}: PartnerBadgeProps) {
+  const logoSize = compact ? "h-10 w-10" : "h-12 w-12";
+
   return (
     <div
-      className={`flex items-center gap-3 rounded-[26px] border border-white/12 bg-[linear-gradient(180deg,rgba(255,255,255,0.1),rgba(255,255,255,0.04))] shadow-[0_24px_60px_rgba(15,23,42,0.18)] backdrop-blur-xl ${
-        compact ? "px-3 py-2" : "px-4 py-3"
+      className={`group relative overflow-hidden rounded-[28px] border border-black/8 bg-white/74 shadow-[0_20px_50px_rgba(15,23,42,0.08)] backdrop-blur-xl transition-transform duration-300 hover:-translate-y-0.5 ${
+        compact ? "px-3 py-2.5" : "px-4 py-3.5"
       }`}
     >
-      {logo}
-      <div className="flex flex-col">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.22em] text-white/45">
-          {label}
-        </span>
-        <span className={`font-semibold tracking-tight text-white ${compact ? "text-sm" : "text-base"}`}>
-          {name}
-        </span>
+      <div
+        className="pointer-events-none absolute inset-0 opacity-90"
+        style={{ backgroundImage: accent }}
+      />
+      <div className="relative flex items-center gap-3">
+        <div
+          className={`flex shrink-0 items-center justify-center rounded-[20px] border border-black/6 bg-white/92 p-2 shadow-[0_14px_28px_rgba(255,255,255,0.8)] ${logoSize}`}
+        >
+          <img
+            src={logoSrc}
+            alt={`${name} logo`}
+            className="h-full w-full object-contain"
+          />
+        </div>
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500">
+            {label}
+          </div>
+          <div
+            className={`truncate font-semibold tracking-tight text-slate-900 ${
+              compact ? "text-sm" : "text-base"
+            }`}
+          >
+            {name}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -120,24 +91,16 @@ export function PartnerStrip({
 }: PartnerStripProps) {
   return (
     <div className={`flex flex-wrap items-center gap-3 ${className}`}>
-      <PartnerBadge
-        label="Hosted by"
-        name="VEED"
-        logo={<VeedLogo compact={compact} />}
-        compact={compact}
-      />
-      <PartnerBadge
-        label="Supported by"
-        name="Lovable"
-        logo={<LovableLogo compact={compact} />}
-        compact={compact}
-      />
-      <PartnerBadge
-        label="Supported by"
-        name="Runware"
-        logo={<RunwareLogo compact={compact} />}
-        compact={compact}
-      />
+      {PARTNERS.map((partner) => (
+        <PartnerBadge
+          key={partner.name}
+          accent={partner.accent}
+          compact={compact}
+          label={partner.label}
+          logoSrc={partner.logoSrc}
+          name={partner.name}
+        />
+      ))}
     </div>
   );
 }

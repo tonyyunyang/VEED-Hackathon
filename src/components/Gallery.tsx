@@ -8,7 +8,6 @@ interface GalleryProps {
 }
 
 export function Gallery({ onSelect, onUploadClick }: GalleryProps) {
-  // Use Vite's glob import to get all videos from the projects folder
   const videoModules = import.meta.glob("../assets/video-projects/*.mp4", {
     eager: true,
     query: "?url",
@@ -22,26 +21,40 @@ export function Gallery({ onSelect, onUploadClick }: GalleryProps) {
   }));
 
   return (
-    <div className="w-full max-w-6xl mx-auto p-6">
-      <div className="flex justify-between items-center mb-8">
-        <h2 className="text-2xl font-bold">Your Video Projects</h2>
-        <Button onClick={onUploadClick} className="gap-2">
+    <div className="mx-auto w-full max-w-6xl px-2 pb-8">
+      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
+            Launch A Project
+          </div>
+          <h2 className="text-3xl font-black tracking-tight text-slate-900">
+            Your Video Projects
+          </h2>
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-600">
+            Open a sample clip to explore the editor instantly, or upload your own
+            footage and run the live tracking flow.
+          </p>
+        </div>
+        <Button
+          onClick={onUploadClick}
+          className="gap-2 rounded-full bg-slate-950 px-5 text-white shadow-[0_18px_36px_rgba(15,23,42,0.16)] hover:bg-slate-900"
+        >
           <Upload className="w-4 h-4" />
           Upload New
         </Button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-2 lg:grid-cols-3">
         {videos.map((video) => (
           <Card
             key={video.path}
-            className="group relative overflow-hidden cursor-pointer hover:ring-2 hover:ring-primary transition-all rounded-2xl border-none shadow-lg bg-card"
+            className="group relative cursor-pointer overflow-hidden rounded-[28px] border border-white/70 bg-white/82 shadow-[0_24px_60px_rgba(15,23,42,0.10)] transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_32px_90px_rgba(15,23,42,0.14)]"
             onClick={() => onSelect(video.url)}
           >
-            <div className="aspect-video bg-black relative flex items-center justify-center overflow-hidden">
+            <div className="relative aspect-video overflow-hidden bg-slate-950">
               <video
                 src={video.url}
-                className="w-full h-full object-cover opacity-80 group-hover:opacity-100 transition-opacity"
+                className="h-full w-full object-cover opacity-90 transition duration-500 group-hover:scale-[1.03] group-hover:opacity-100"
                 muted
                 onMouseEnter={(e) => e.currentTarget.play()}
                 onMouseLeave={(e) => {
@@ -49,31 +62,59 @@ export function Gallery({ onSelect, onUploadClick }: GalleryProps) {
                   e.currentTarget.currentTime = 0;
                 }}
               />
-              <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors flex items-center justify-center pointer-events-none">
-                <div className="bg-white/20 backdrop-blur-md rounded-full p-3 transform group-hover:scale-110 transition-transform">
-                  <Play className="w-8 h-8 text-white fill-white" />
+              <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(8,15,34,0.10),rgba(8,15,34,0.58))]" />
+              <div className="pointer-events-none absolute inset-x-5 top-5 flex items-center justify-between">
+                <div className="rounded-full border border-white/20 bg-black/24 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-white/80 backdrop-blur-md">
+                  Sample clip
+                </div>
+                <div className="rounded-full border border-white/18 bg-white/14 p-3 text-white shadow-[0_12px_28px_rgba(0,0,0,0.22)] backdrop-blur-md transition-transform duration-300 group-hover:scale-110">
+                  <Play className="h-6 w-6 fill-white" />
                 </div>
               </div>
             </div>
-            <div className="p-4 bg-background/50 backdrop-blur-sm">
-              <p className="font-semibold text-foreground truncate">
-                {video.name}
+            <div className="bg-white/84 p-5 backdrop-blur-sm">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="truncate text-lg font-bold tracking-tight text-slate-900">
+                  {video.name}
+                </p>
+                <div className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.2em] text-slate-500">
+                  Ready
+                </div>
+              </div>
+              <p className="text-sm leading-6 text-slate-600">
+                Open straight in the review editor with timeline controls and
+                tracked-face overlays.
               </p>
-              <p className="text-xs text-muted-foreground mt-1 uppercase tracking-wider">
-                Video Project
-              </p>
+              <div className="mt-4 text-xs font-semibold uppercase tracking-[0.22em] text-slate-400">
+                Demo Project
+              </div>
             </div>
           </Card>
         ))}
 
         <div
-          className="border-2 border-dashed border-muted-foreground/25 rounded-2xl aspect-video flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-muted/50 hover:border-primary/50 transition-all group"
+          className="group relative min-h-[320px] cursor-pointer overflow-hidden rounded-[28px] border border-dashed border-slate-300 bg-[linear-gradient(135deg,rgba(255,255,255,0.7),rgba(244,247,255,0.9))] shadow-[0_20px_50px_rgba(15,23,42,0.06)] transition-all duration-300 hover:-translate-y-1 hover:border-slate-400 hover:shadow-[0_30px_90px_rgba(15,23,42,0.10)] md:min-h-[340px]"
           onClick={onUploadClick}
         >
-          <div className="bg-muted rounded-full p-4 group-hover:bg-primary/10 group-hover:text-primary transition-colors">
-            <Upload className="w-8 h-8" />
+          <div className="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-lime-200/70 blur-3xl transition-transform duration-500 group-hover:scale-125" />
+          <div className="absolute -bottom-12 left-8 h-32 w-32 rounded-full bg-sky-200/70 blur-3xl transition-transform duration-500 group-hover:scale-125" />
+          <div className="relative flex h-full flex-col items-center justify-center gap-5 px-8 py-8 text-center md:px-10 md:py-10">
+            <div className="rounded-full border border-slate-200 bg-white/88 p-5 text-slate-700 shadow-[0_12px_24px_rgba(15,23,42,0.08)] transition-all duration-300 group-hover:scale-105 group-hover:text-slate-950">
+              <Upload className="h-8 w-8" />
+            </div>
+            <div className="max-w-[24rem]">
+              <div className="text-lg font-bold tracking-tight text-slate-900">
+                Upload New Video
+              </div>
+              <p className="mt-3 text-sm leading-7 text-slate-600">
+                Bring your own clip into the live tracking pipeline and review it
+                in the editor.
+              </p>
+            </div>
+            <div className="rounded-full border border-slate-200 bg-white/88 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.22em] text-slate-500 shadow-[0_8px_18px_rgba(15,23,42,0.05)]">
+              MP4, MOV, WebM
+            </div>
           </div>
-          <span className="text-sm font-semibold">Upload New Video</span>
         </div>
       </div>
     </div>
