@@ -24,6 +24,7 @@ __pycache__
 !.env.example
 server/.env
 server/venv
+server/storage
 
 *.af
 # Temporary Scratch Files
