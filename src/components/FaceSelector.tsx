@@ -1,15 +1,33 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { FaceInfo } from "../types";
 import { Check } from "lucide-react";
+import { VideoPreview } from "./VideoPreview";
 
 interface FaceSelectorProps {
   faces: FaceInfo[];
+  videoFile: File | null;
   onSwap: (selectedIds: string[]) => void;
   isSwapping: boolean;
 }
 
-export function FaceSelector({ faces, onSwap, isSwapping }: FaceSelectorProps) {
+export function FaceSelector({
+  faces,
+  videoFile,
+  onSwap,
+  isSwapping,
+}: FaceSelectorProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!videoFile) {
+      setPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(videoFile);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [videoFile]);
 
   const toggleFace = (id: string) => {
     setSelected((prev) => {
@@ -34,54 +52,64 @@ export function FaceSelector({ faces, onSwap, isSwapping }: FaceSelectorProps) {
   }
 
   return (
-    <div className="flex flex-col items-center gap-6 w-full max-w-2xl">
-      <h2 className="text-xl font-semibold">Select faces to swap</h2>
+    <div className="flex flex-col md:flex-row gap-8 w-full max-w-4xl">
+      {/* Left: video preview */}
+      {previewUrl && (
+        <div className="flex-1 min-w-0">
+          <VideoPreview src={previewUrl} />
+        </div>
+      )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-4 w-full">
-        {faces.map((face) => {
-          const isSelected = selected.has(face.face_id);
-          return (
-            <button
-              key={face.face_id}
-              onClick={() => toggleFace(face.face_id)}
-              className={`relative rounded-xl overflow-hidden border-2 transition-all ${
-                isSelected
-                  ? "border-primary ring-2 ring-primary/30"
-                  : "border-transparent hover:border-muted-foreground/30"
-              }`}
-            >
-              <img
-                src={face.thumbnail}
-                alt={`Face ${face.face_id}`}
-                className="w-full aspect-square object-cover"
-              />
-              {isSelected && (
-                <div className="absolute top-2 right-2 w-6 h-6 bg-primary rounded-full flex items-center justify-center">
-                  <Check className="w-4 h-4 text-primary-foreground" />
+      {/* Right: face grid + swap button */}
+      <div className="flex flex-col items-center gap-6 flex-1 min-w-0">
+        <h2 className="text-xl font-semibold">Select faces to swap</h2>
+
+        <div className="grid grid-cols-2 gap-4 w-full">
+          {faces.map((face) => {
+            const isSelected = selected.has(face.face_id);
+            return (
+              <button
+                key={face.face_id}
+                onClick={() => toggleFace(face.face_id)}
+                className={`relative rounded-xl overflow-hidden border-2 transition-all ${
+                  isSelected
+                    ? "border-primary ring-2 ring-primary/30"
+                    : "border-transparent hover:border-muted-foreground/30"
+                }`}
+              >
+                <img
+                  src={face.thumbnail}
+                  alt={`Face ${face.face_id}`}
+                  className="w-full aspect-square object-cover"
+                />
+                {isSelected && (
+                  <div className="absolute top-2 right-2 w-6 h-6 bg-primary rounded-full flex items-center justify-center">
+                    <Check className="w-4 h-4 text-primary-foreground" />
+                  </div>
+                )}
+                <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent p-3">
+                  <div className="flex gap-2 text-xs text-white">
+                    <span className="bg-white/20 backdrop-blur-sm px-2 py-0.5 rounded-full">
+                      {face.gender}, {face.age}y
+                    </span>
+                    <span className="bg-white/20 backdrop-blur-sm px-2 py-0.5 rounded-full">
+                      {face.frame_count} frames
+                    </span>
+                  </div>
                 </div>
-              )}
-              <div className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent p-3">
-                <div className="flex gap-2 text-xs text-white">
-                  <span className="bg-white/20 backdrop-blur-sm px-2 py-0.5 rounded-full">
-                    {face.gender}, {face.age}y
-                  </span>
-                  <span className="bg-white/20 backdrop-blur-sm px-2 py-0.5 rounded-full">
-                    {face.frame_count} frames
-                  </span>
-                </div>
-              </div>
-            </button>
-          );
-        })}
+              </button>
+            );
+          })}
+        </div>
+
+        <button
+          className="w-full max-w-xs py-3 px-6 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+          onClick={() => onSwap(Array.from(selected))}
+          disabled={selected.size === 0 || isSwapping}
+        >
+          {isSwapping ? "Starting..." : `Swap ${selected.size} face(s)`}
+        </button>
       </div>
-
-      <button
-        className="w-full max-w-xs py-3 px-6 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
-        onClick={() => onSwap(Array.from(selected))}
-        disabled={selected.size === 0 || isSwapping}
-      >
-        {isSwapping ? "Starting..." : `Swap ${selected.size} face(s)`}
-      </button>
     </div>
   );
 }

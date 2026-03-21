@@ -1,14 +1,20 @@
 import { useEffect, useState } from "react";
 import { getStatus, getDownloadUrl } from "../lib/utils/api";
 import type { StatusResponse } from "../types";
-import { Download, AlertCircle, Loader2 } from "lucide-react";
+import { Download, AlertCircle, Loader2, RotateCcw } from "lucide-react";
+import { VideoPreview } from "./VideoPreview";
 
 interface ProcessingStatusProps {
   jobId: string;
   onRetry: () => void;
+  onStartOver: () => void;
 }
 
-export function ProcessingStatus({ jobId, onRetry }: ProcessingStatusProps) {
+export function ProcessingStatus({
+  jobId,
+  onRetry,
+  onStartOver,
+}: ProcessingStatusProps) {
   const [status, setStatus] = useState<StatusResponse>({
     status: "processing",
     progress: 0,
@@ -48,20 +54,27 @@ export function ProcessingStatus({ jobId, onRetry }: ProcessingStatusProps) {
   }
 
   if (status.status === "completed") {
+    const downloadUrl = getDownloadUrl(jobId);
     return (
-      <div className="flex flex-col items-center gap-4">
-        <div className="w-16 h-16 bg-green-500/10 rounded-full flex items-center justify-center">
-          <Download className="w-8 h-8 text-green-500" />
+      <div className="flex flex-col items-center gap-6 w-full max-w-lg">
+        <VideoPreview src={downloadUrl} />
+        <div className="flex gap-3">
+          <a
+            href={downloadUrl}
+            download="swapped.mp4"
+            className="py-3 px-8 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
+          >
+            <Download className="w-4 h-4" />
+            Download Video
+          </a>
+          <button
+            className="py-3 px-6 border border-muted-foreground/25 text-foreground rounded-xl font-medium hover:bg-muted transition-colors inline-flex items-center gap-2"
+            onClick={onStartOver}
+          >
+            <RotateCcw className="w-4 h-4" />
+            Start Over
+          </button>
         </div>
-        <p className="text-lg font-medium">Ready!</p>
-        <a
-          href={getDownloadUrl(jobId)}
-          download="swapped.mp4"
-          className="py-3 px-8 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
-        >
-          <Download className="w-4 h-4" />
-          Download Video
-        </a>
       </div>
     );
   }

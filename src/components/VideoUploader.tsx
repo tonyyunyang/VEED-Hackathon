@@ -1,5 +1,6 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Upload } from "lucide-react";
+import { VideoPreview } from "./VideoPreview";
 
 interface VideoUploaderProps {
   onUpload: (file: File) => void;
@@ -9,7 +10,18 @@ interface VideoUploaderProps {
 export function VideoUploader({ onUpload, isUploading }: VideoUploaderProps) {
   const [dragOver, setDragOver] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!selectedFile) {
+      setPreviewUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(selectedFile);
+    setPreviewUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [selectedFile]);
 
   const handleFile = useCallback((file: File) => {
     const validTypes = ["video/mp4", "video/quicktime", "video/webm"];
@@ -29,6 +41,32 @@ export function VideoUploader({ onUpload, isUploading }: VideoUploaderProps) {
     },
     [handleFile]
   );
+
+  if (selectedFile && previewUrl) {
+    return (
+      <div className="flex flex-col items-center gap-4 w-full max-w-lg">
+        <VideoPreview src={previewUrl} />
+        <p className="text-sm text-muted-foreground truncate max-w-full">
+          {selectedFile.name} ({(selectedFile.size / 1024 / 1024).toFixed(1)}{" "}
+          MB)
+        </p>
+        <button
+          className="w-full py-3 px-6 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
+          onClick={() => onUpload(selectedFile)}
+          disabled={isUploading}
+        >
+          {isUploading ? "Uploading..." : "Upload & Analyze"}
+        </button>
+        <button
+          className="text-sm text-muted-foreground hover:text-foreground transition-colors"
+          onClick={() => setSelectedFile(null)}
+          disabled={isUploading}
+        >
+          Change video
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col items-center gap-6 w-full max-w-lg">
@@ -62,22 +100,6 @@ export function VideoUploader({ onUpload, isUploading }: VideoUploaderProps) {
           or click to browse (MP4, MOV, WebM)
         </p>
       </div>
-
-      {selectedFile && (
-        <div className="flex flex-col items-center gap-3 w-full">
-          <p className="text-sm text-muted-foreground truncate max-w-full">
-            {selectedFile.name} (
-            {(selectedFile.size / 1024 / 1024).toFixed(1)} MB)
-          </p>
-          <button
-            className="w-full py-3 px-6 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors"
-            onClick={() => onUpload(selectedFile)}
-            disabled={isUploading}
-          >
-            {isUploading ? "Uploading..." : "Upload & Analyze"}
-          </button>
-        </div>
-      )}
     </div>
   );
 }

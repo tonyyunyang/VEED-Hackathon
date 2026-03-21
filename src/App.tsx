@@ -11,6 +11,7 @@ import { Loader2 } from "lucide-react";
 function App() {
   const [step, setStep] = useState<AppStep>("upload");
   const [videoId, setVideoId] = useState("");
+  const [videoFile, setVideoFile] = useState<File | null>(null);
   const [faces, setFaces] = useState<FaceInfo[]>([]);
   const [jobId, setJobId] = useState("");
   const [isUploading, setIsUploading] = useState(false);
@@ -20,6 +21,7 @@ function App() {
   const handleUpload = async (file: File) => {
     setIsUploading(true);
     setError(null);
+    setVideoFile(file);
     try {
       const vid = await uploadVideo(file);
       setVideoId(vid);
@@ -50,6 +52,15 @@ function App() {
     }
   };
 
+  const handleStartOver = () => {
+    setStep("upload");
+    setVideoId("");
+    setVideoFile(null);
+    setFaces([]);
+    setJobId("");
+    setError(null);
+  };
+
   return (
     <div className="w-full min-h-screen bg-background font-sans flex flex-col items-center justify-center p-8">
       <h1 className="text-3xl font-bold mb-8">Face Swap</h1>
@@ -77,13 +88,18 @@ function App() {
       {step === "select" && (
         <FaceSelector
           faces={faces}
+          videoFile={videoFile}
           onSwap={handleSwap}
           isSwapping={isSwapping}
         />
       )}
 
       {step === "processing" && (
-        <ProcessingStatus jobId={jobId} onRetry={() => setStep("select")} />
+        <ProcessingStatus
+          jobId={jobId}
+          onRetry={() => setStep("select")}
+          onStartOver={handleStartOver}
+        />
       )}
     </div>
   );
