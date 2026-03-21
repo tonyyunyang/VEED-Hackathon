@@ -21,4 +21,11 @@ export interface StatusResponse {
   error: string | null;
 }
 
-export type AppStep = "upload" | "detecting" | "select" | "processing";
+export type AppStep =
+  | "gallery"
+  | "upload"
+  | "detecting"
+  | "select"
+  | "processing"
+  | "player";
+
