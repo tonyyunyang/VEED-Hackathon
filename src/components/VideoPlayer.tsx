@@ -306,7 +306,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Hover Controls */}
       <div
-        className={`absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-4xl px-4 transition-opacity duration-300 ${hovered || selectionMode ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+        className={`hover-controls absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-4xl px-4 transition-opacity duration-300 ${hovered || selectionMode ? "opacity-100" : "opacity-0 pointer-events-none"}`}
       >
         <TooltipProvider>
           <Toolbar className="bg-background/80 backdrop-blur-md p-4 rounded-2xl border shadow-2xl flex flex-col gap-4">
@@ -387,7 +387,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         }
                       >
                         <Scissors className="w-4 h-4 mr-2" />
-                        {selectionMode ? "Cancel" : "Scene Selection"}
+                        {selectionMode ? "Cancel" : ""}
                       </Button>
                     }
                   />
@@ -401,16 +401,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Scene Selection Mode Overlay */}
       {selectionMode && (
-        <div className="absolute inset-0 z-50 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center p-8 animate-in fade-in zoom-in duration-300">
+        <div className="selection_mode_overlay absolute inset-0 z-50  backdrop-blur-sm flex flex-col items-center justify-center p-8 animate-in fade-in zoom-in duration-200">
           <div className="bg-background border rounded-3xl p-8 max-w-5xl w-full flex flex-col gap-6 shadow-2xl">
             <div className="flex justify-between items-center">
               <h3 className="text-xl font-semibold">Select Timeframe</h3>
               <div className="flex gap-2">
-                {onBack && (
-                  <Button variant="ghost" onClick={onBack}>
-                    Back to Gallery
-                  </Button>
-                )}
                 <Button
                   variant="ghost"
                   size="icon"
