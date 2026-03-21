@@ -10,7 +10,7 @@ import {
   TooltipPopup,
   TooltipProvider,
 } from "./ui/tooltip";
-import { Play, Pause, Scissors, Check, X } from "lucide-react";
+import { Play, Pause, Scissors, Check, ScanFace } from "lucide-react";
 
 const PERSON_COLORS = [
   "#00FF00", // Bright Green
@@ -306,178 +306,208 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       {/* Hover Controls */}
       <div
-        className={`hover-controls absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-4xl px-4 transition-opacity duration-300 ${hovered || selectionMode ? "opacity-100" : "opacity-0 pointer-events-none"}`}
+        className={`hover-controls absolute bottom-8 left-1/2 -translate-x-1/2 w-full max-w-4xl px-4 transition-all duration-500 ease-in-out ${
+          hovered || selectionMode
+            ? "opacity-100"
+            : "opacity-0 pointer-events-none"
+        }`}
       >
         <TooltipProvider>
-          <Toolbar className="bg-background/80 backdrop-blur-md p-4 rounded-2xl border shadow-2xl flex flex-col gap-4">
-            {/* Timeline / Scrubber */}
-            {!selectionMode && (
-              <div className="w-full h-8 flex items-center px-4">
-                <Slider
-                  min={startTime}
-                  max={endTime}
-                  step={0.01}
-                  value={[currentTime]}
-                  onValueChange={handleScrub}
-                  className="flex-1"
-                />
-              </div>
-            )}
+          <Toolbar
+            className={`bg-background/80 backdrop-blur-md p-4 rounded-2xl border shadow-2xl flex flex-col gap-4 transition-all duration-500 ease-in-out overflow-hidden ${
+              selectionMode ? "max-w-5xl" : "max-w-4xl"
+            }`}
+          >
+            {selectionMode ? (
+              // Selection Mode Controls
+              <div className="flex flex-col gap-6 w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg font-semibold">Select Timeframe</h3>
+                  <div className="flex flex-col items-end">
+                    <span className="text-xs text-muted-foreground uppercase tracking-widest font-bold">
+                      Range
+                    </span>
+                    <span className="text-sm font-mono font-bold">
+                      {tempSelection[0].toFixed(2)}s —{" "}
+                      {tempSelection[1].toFixed(2)}s
+                    </span>
+                  </div>
+                </div>
 
-            {/* Controls Group */}
-            <div className="flex items-center justify-between w-full px-4">
-              <ToolbarGroup className="flex items-center gap-2">
-                {onBack && (
+                {/* Keyframe Strip */}
+                <div className="relative w-full overflow-hidden bg-muted/30 rounded-xl p-1.5 flex gap-1 h-24 select-none group border border-white/5">
+                  {keyframes.map((src, i) => (
+                    <div key={i} className="relative h-full flex-1">
+                      <img
+                        src={src}
+                        className="h-full w-full object-cover rounded-sm shadow-sm grayscale group-hover:grayscale-0 transition-all duration-300"
+                        alt={`Keyframe ${i}`}
+                      />
+                      <div
+                        className={`absolute inset-0 bg-black/50 transition-opacity duration-300 ${
+                          (i / keyframes.length) * duration <
+                            tempSelection[0] ||
+                          ((i + 1) / keyframes.length) * duration >
+                            tempSelection[1]
+                            ? "opacity-100"
+                            : "opacity-0"
+                        }`}
+                      />
+                    </div>
+                  ))}
+
+                  {/* Range Selection Overlay */}
+                  <div className="absolute inset-x-3 inset-y-0 flex items-center">
+                    <Slider
+                      min={0}
+                      max={duration}
+                      step={0.1}
+                      value={tempSelection}
+                      onValueChange={(val) =>
+                        setTempSelection(val as [number, number])
+                      }
+                      className="w-full z-10"
+                    />
+                  </div>
+                </div>
+
+                <div className="flex justify-end items-center gap-3">
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={onBack}
-                    className="mr-2"
+                    onClick={() => setSelectionMode(false)}
+                    className="hover:bg-destructive/10 hover:text-destructive transition-colors"
                   >
-                    Back
+                    Discard
                   </Button>
-                )}
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button size="icon" variant="ghost" onClick={togglePlay}>
-                        {playing ? (
-                          <Pause className="w-6 h-6" />
-                        ) : (
-                          <Play className="w-6 h-6" />
-                        )}
-                      </Button>
-                    }
-                  />
-                  <TooltipPopup>{playing ? "Pause" : "Play"}</TooltipPopup>
-                </Tooltip>
-
-                <div className="text-xs font-mono tabular-nums text-muted-foreground ml-2">
-                  {currentTime.toFixed(2)} / {duration.toFixed(2)}s
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={applySelection}
+                    className="bg-primary hover:bg-primary/90 shadow-lg shadow-primary/20"
+                  >
+                    <Check className="w-4 h-4 mr-2" />
+                    Accept Selection
+                  </Button>
                 </div>
-              </ToolbarGroup>
-
-              <ToolbarGroup className="flex items-center gap-4">
-                <ToggleGroup
-                  type="single"
-                  value={[playbackRate.toString()]}
-                  onValueChange={changeSpeed}
-                >
-                  <Toggle value="0.5" className="text-xs px-2">
-                    0.5x
-                  </Toggle>
-                  <Toggle value="1" className="text-xs px-2">
-                    1x
-                  </Toggle>
-                  <Toggle value="2" className="text-xs px-2">
-                    2x
-                  </Toggle>
-                </ToggleGroup>
-
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        variant={selectionMode ? "secondary" : "outline"}
-                        size="sm"
-                        onClick={
-                          selectionMode
-                            ? () => setSelectionMode(false)
-                            : enterSelectionMode
-                        }
-                      >
-                        <Scissors className="w-4 h-4 mr-2" />
-                        {selectionMode ? "Cancel" : ""}
-                      </Button>
-                    }
+              </div>
+            ) : (
+              // Playback Mode Controls
+              <div className="flex flex-col gap-4 w-full animate-in fade-in slide-in-from-top-2 duration-500">
+                {/* Timeline / Scrubber */}
+                <div className="w-full h-2 flex items-center px-2">
+                  <Slider
+                    min={startTime}
+                    max={endTime}
+                    step={0.01}
+                    value={[currentTime]}
+                    onValueChange={handleScrub}
+                    className="flex-1"
                   />
-                  <TooltipPopup>Scene Selection</TooltipPopup>
-                </Tooltip>
-              </ToolbarGroup>
-            </div>
+                </div>
+
+                {/* Controls Group */}
+                <div className="flex items-center justify-between w-full px-2">
+                  <ToolbarGroup className="flex items-center gap-3">
+                    {onBack && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={onBack}
+                        className="h-8"
+                      >
+                        Back
+                      </Button>
+                    )}
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            onClick={togglePlay}
+                            className="h-10 w-10"
+                          >
+                            {playing ? (
+                              <Pause className="w-5 h-5 fill-current" />
+                            ) : (
+                              <Play className="w-5 h-5 fill-current ml-0.5" />
+                            )}
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup>{playing ? "Pause" : "Play"}</TooltipPopup>
+                    </Tooltip>
+
+                    <div className="text-sm font-medium font-mono tabular-nums text-muted-foreground/80 bg-muted/50 px-3 py-1 rounded-full">
+                      {currentTime.toFixed(2)}{" "}
+                      <span className="text-muted-foreground/40 mx-1">/</span>{" "}
+                      {duration.toFixed(2)}s
+                    </div>
+                  </ToolbarGroup>
+
+                  <ToolbarGroup className="flex items-center gap-6">
+                    <ToggleGroup
+                      value={[playbackRate.toString()]}
+                      onValueChange={changeSpeed}
+                      className="bg-muted/30 p-1 rounded-lg border border-white/5"
+                    >
+                      <Toggle
+                        value="0.5"
+                        className="text-[10px] h-7 px-2 font-bold transition-all data-[state=on]:bg-background data-[state=on]:shadow-sm"
+                      >
+                        0.5x
+                      </Toggle>
+                      <Toggle
+                        value="1"
+                        className="text-[10px] h-7 px-2 font-bold transition-all data-[state=on]:bg-background data-[state=on]:shadow-sm"
+                      >
+                        1x
+                      </Toggle>
+                      <Toggle
+                        value="2"
+                        className="text-[10px] h-7 px-2 font-bold transition-all data-[state=on]:bg-background data-[state=on]:shadow-sm"
+                      >
+                        2x
+                      </Toggle>
+                    </ToggleGroup>
+
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="sm"
+                            onClick={enterSelectionMode}
+                            className="h-9 px-4 font-semibold shadow-sm hover:shadow-md transition-all active:scale-95"
+                          >
+                            <Scissors className="w-4 h-4 " />
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup>Edit timeframe</TooltipPopup>
+                    </Tooltip>
+
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="sm"
+                            onClick={enterSelectionMode}
+                            className="h-9 px-4 font-semibold shadow-sm hover:shadow-md transition-all active:scale-95"
+                          >
+                            <ScanFace className="w-4 h-4 mr-2" />
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup>Control Faces</TooltipPopup>
+                    </Tooltip>
+                  </ToolbarGroup>
+                </div>
+              </div>
+            )}
           </Toolbar>
         </TooltipProvider>
       </div>
-
-      {/* Scene Selection Mode Overlay */}
-      {selectionMode && (
-        <div className="selection_mode_overlay absolute inset-0 z-50  backdrop-blur-sm flex flex-col items-center justify-center p-8 animate-in fade-in zoom-in duration-200">
-          <div className="bg-background border rounded-3xl p-8 max-w-5xl w-full flex flex-col gap-6 shadow-2xl">
-            <div className="flex justify-between items-center">
-              <h3 className="text-xl font-semibold">Select Timeframe</h3>
-              <div className="flex gap-2">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setSelectionMode(false)}
-                >
-                  <X className="w-6 h-6" />
-                </Button>
-              </div>
-            </div>
-
-            {/* Keyframe Strip */}
-            <div className="relative w-full overflow-hidden bg-muted rounded-xl p-2 flex gap-1 h-32 select-none group">
-              {keyframes.map((src, i) => (
-                <div key={i} className="relative h-full flex-1">
-                  <img
-                    src={src}
-                    className="h-full w-full object-cover rounded shadow-sm grayscale group-hover:grayscale-0 transition-all"
-                  />
-                  {/* Visual Mask for out-of-range areas */}
-                  <div
-                    className={`absolute inset-0 bg-black/40 transition-opacity ${
-                      (i / keyframes.length) * duration < tempSelection[0] ||
-                      ((i + 1) / keyframes.length) * duration > tempSelection[1]
-                        ? "opacity-100"
-                        : "opacity-0"
-                    }`}
-                  />
-                </div>
-              ))}
-
-              {/* Range Selection Overlay */}
-              <div className="absolute inset-x-4 inset-y-0 flex items-center">
-                <Slider
-                  min={0}
-                  max={duration}
-                  step={0.1}
-                  value={tempSelection}
-                  onValueChange={(val) =>
-                    setTempSelection(val as [number, number])
-                  }
-                  className="w-full z-10"
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-between items-center">
-              <div className="flex flex-col gap-1">
-                <span className="text-sm text-muted-foreground uppercase tracking-widest font-semibold">
-                  Range
-                </span>
-                <span className="text-lg font-mono">
-                  {tempSelection[0].toFixed(2)}s — {tempSelection[1].toFixed(2)}
-                  s
-                </span>
-              </div>
-
-              <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  onClick={() => setSelectionMode(false)}
-                >
-                  Discard
-                </Button>
-                <Button variant="default" onClick={applySelection}>
-                  <Check className="w-4 h-4 mr-2" />
-                  Accept Selection
-                </Button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 };
