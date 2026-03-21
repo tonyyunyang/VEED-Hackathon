@@ -12,17 +12,51 @@ import {
 } from "./ui/tooltip";
 import { Play, Pause, Scissors, Check, ScanFace } from "lucide-react";
 
-const PERSON_COLORS = [
-  "#00FF00", // Bright Green
-  "#FF00FF", // Magenta
-  "#00FFFF", // Cyan
-  "#FFFF00", // Yellow
-  "#FF4500", // OrangeRed
-  "#ADFF2F", // GreenYellow
-];
+/**
+ * Generates a set of colors with high contrast between them and at least 4.6:1 contrast against black.
+ * Uses HSL distribution and relative luminance calculation to ensure accessibility.
+ */
+const getRelativeLuminance = (r: number, g: number, b: number) => {
+  const [rl, gl, bl] = [r, g, b].map((c) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  });
+  return 0.2126 * rl + 0.7152 * gl + 0.0722 * bl;
+};
 
-const getPersonColor = (id: number) => {
-  return PERSON_COLORS[id % PERSON_COLORS.length];
+const hslToRgb = (h: number, s: number, l: number) => {
+  s /= 100;
+  l /= 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) =>
+    l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+  return [
+    Math.round(255 * f(0)),
+    Math.round(255 * f(8)),
+    Math.round(255 * f(4)),
+  ];
+};
+
+const generateAccessibleColors = (count: number): string[] => {
+  const colors: string[] = [];
+  const minLuminance = 0.18; // Required for ~4.6:1 contrast against black
+
+  for (let i = 0; i < count; i++) {
+    const h = (i * 360) / count;
+    let s = 80; // High saturation for vibrancy
+    let l = 50; // Start at middle lightness
+
+    // Adjust lightness to ensure accessibility against black
+    let [r, g, b] = hslToRgb(h, s, l);
+    while (getRelativeLuminance(r, g, b) < minLuminance && l < 95) {
+      l += 2;
+      [r, g, b] = hslToRgb(h, s, l);
+    }
+
+    colors.push(`rgb(${r}, ${g}, ${b})`);
+  }
+  return colors;
 };
 
 interface VideoPlayerProps {
@@ -66,14 +100,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const framePeople = (videoData.frames as any)[frameIdx.toString()];
       framePeople.forEach((p: any) => {
         if (!people[p.id]) {
-          // If we haven't seen this person, or we find a better score (up to 1)
           people[p.id] = {
             id: p.id,
             label: p.label,
             bestFrameIndex: frameIdx,
             bbox: p.bbox,
             det_score: p.det_score,
-            color: getPersonColor(p.id),
           };
         } else if (
           people[p.id].det_score < 1 &&
@@ -85,8 +117,25 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         }
       });
     });
-    return Object.values(people);
+
+    const peopleArray = Object.values(people);
+    const colors = generateAccessibleColors(peopleArray.length);
+    
+    // Sort by ID to ensure stable color assignment if needed, 
+    // or just map by index in the object values.
+    return peopleArray.map((p, index) => ({
+      ...p,
+      color: colors[index],
+    }));
   }, []);
+
+  const getPersonColor = React.useCallback(
+    (id: number) => {
+      const person = personMetaData.find((p) => p.id === id);
+      return person?.color || "#FFFFFF";
+    },
+    [personMetaData],
+  );
 
   const thumbnailCanvasesRef = useRef<Record<number, HTMLCanvasElement | null>>(
     {},
@@ -197,7 +246,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           const origW = videoData.video_metadata.width;
           const currentFrame = Math.floor(video.currentTime * fps);
           const frameData = (videoData.frames as any)[currentFrame.toString()];
-
+          console.log(
+            "currentFrame",
+            currentFrame,
+            "currentTime",
+            video.currentTime,
+          );
           if (frameData) {
             const scale = drawWidth / origW;
 
@@ -242,7 +296,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => {
       cancelAnimationFrame(animationFrameId);
     };
-  }, [faceControlMode, selectedPersonIds, appliedSelectedIds]);
+  }, [faceControlMode, selectedPersonIds, appliedSelectedIds, getPersonColor]);
 
   // Sync canvas size with parent
   useEffect(() => {
