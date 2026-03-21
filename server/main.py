@@ -96,7 +96,7 @@ async def detect_faces(req: DetectFacesRequest):
 
 
 async def _run_swap_job(job_id: str, video_id: str, face_ids: list[str]):
-    async with swap_lock:
+    async with swap_lock:  # TODO do I need a lock for the //?
         try:
             vdir = os.path.join(STORAGE_DIR, video_id)
             frames_dir = os.path.join(vdir, "frames")
@@ -112,24 +112,38 @@ async def _run_swap_job(job_id: str, video_id: str, face_ids: list[str]):
             jobs[job_id]["status"] = "processing"
             jobs[job_id]["progress"] = 0.1
 
+            # Phase 1: face_tracker extracts per-face cropped clips
+            clips_dir = os.path.join(vdir, "face_clips")
+            manifests = await asyncio.get_event_loop().run_in_executor(
+                None,
+                face_tracker.extract_face_clips,
+                frames_dir,
+                faces_json,
+                face_ids,
+                clips_dir,
+            )
+
+            jobs[job_id]["progress"] = 0.3
+
+            # Phase 2: face_swapper swaps clips + composites back
             def update_progress(p):
-                jobs[job_id]["progress"] = 0.1 + p * 0.7
+                jobs[job_id]["progress"] = 0.3 + p * 0.5
 
             adapter = face_swapper.InsightFaceSwapAdapter()
             await asyncio.get_event_loop().run_in_executor(
                 None,
                 face_swapper.swap_faces_pipeline,
+                manifests,
+                faces_json,
                 frames_dir,
                 swapped_dir,
-                faces_json,
-                face_ids,
                 adapter,
                 update_progress,
             )
 
             jobs[job_id]["progress"] = 0.8
 
-            if ENABLE_LIPSYNC:
+            if ENABLE_LIPSYNC:  # TODO: Non working for now, placeholder
                 try:
                     from services.lipsync import apply_lipsync
                     jobs[job_id]["progress"] = 0.85
@@ -220,5 +234,6 @@ async def download_video(job_id: str):
 
 if __name__ == "__main__":
     import uvicorn
+
     os.makedirs(STORAGE_DIR, exist_ok=True)
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

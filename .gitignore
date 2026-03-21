@@ -25,6 +25,7 @@ __pycache__
 server/.env
 server/venv
 server/storage
+server/test_swap_output
 
 *.af
 # Temporary Scratch Files

@@ -1,15 +1,21 @@
 [project]
-name = "veed-agent-coordinator"
+name = "veed-face-swap"
 version = "0.1.0"
-description = "AI wrapper to coordinate multiple agents"
+description = "Video face swap tool using InsightFace"
 requires-python = ">=3.11"
 
 dependencies = [
-    "anthropic>=0.52.0",
-    "openai>=1.82.0",
     "pydantic>=2.11.0",
     "httpx>=0.28.0",
     "python-dotenv>=1.1.0",
+    "fastapi",
+    "uvicorn",
+    "insightface>=0.7.3",
+    "onnxruntime>=1.17.0",
+    "opencv-python>=4.9.0",
+    "numpy>=1.26.0",
+    "python-multipart>=0.0.9",
+    "fal-client>=0.5.0",
 ]
 
 [dependency-groups]

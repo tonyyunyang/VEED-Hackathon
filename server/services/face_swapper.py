@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import cv2
 import numpy as np
 from insightface.app import FaceAnalysis
+import insightface
 
 _app: FaceAnalysis | None = None
 _swapper = None
@@ -24,7 +25,6 @@ def _get_app() -> FaceAnalysis:
 def _get_swapper():
     global _swapper
     if _swapper is None:
-        import insightface
         model_path = os.path.join(
             os.path.dirname(__file__), "..", "models", "inswapper_128.onnx"
         )
@@ -39,22 +39,6 @@ def _get_swapper():
 
 def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
-
-
-def _detect_face_in_frame(frame: np.ndarray, target_embedding: np.ndarray, threshold: float = 0.4):
-    """Detect a specific face in a frame by matching embedding.
-
-    Returns the InsightFace face object if found, else None.
-    Thread-safe: acquires _onnx_lock around app.get().
-    """
-    app = _get_app()
-    with _onnx_lock:
-        detected = app.get(frame)
-    for face in detected:
-        sim = _cosine_similarity(face.normed_embedding, target_embedding)
-        if sim >= threshold:
-            return face
-    return None
 
 
 class FaceSwapAdapter(ABC):
@@ -91,106 +75,21 @@ class InsightFaceSwapAdapter(FaceSwapAdapter):
 
 
 # ---------------------------------------------------------------------------
-# Pipeline: crop → parallel swap → composite
+# Pipeline: swap pre-cropped clips → composite back
 # ---------------------------------------------------------------------------
 
 
-def crop_face_clips(
-    frames_dir: str,
-    faces_json: dict,
-    selected_face_ids: list[str],
-    output_base_dir: str,
-    progress_callback=None,
-) -> dict[str, dict]:
-    """Extract per-face cropped frame sequences from the full frames.
-
-    For each selected face:
-    1. Re-detect the face on every frame using embedding matching
-    2. Crop a padded square region around the face
-    3. Save cropped frames to {output_base_dir}/{face_id}/frame_XXXX.jpg
-
-    Returns a manifest dict per face with crop coordinates for compositing.
-    """
-    frame_files = sorted(
-        f for f in os.listdir(frames_dir)
-        if f.startswith("frame_") and f.endswith(".jpg")
-    )
-    manifests = {}
-
-    for face_id in selected_face_ids:
-        face_data = faces_json["faces"][face_id]
-        target_embedding = np.array(face_data["embedding"])
-
-        clip_dir = os.path.join(output_base_dir, face_id)
-        os.makedirs(clip_dir, exist_ok=True)
-
-        # Single pass: detect face, cache frame, collect bboxes
-        per_frame_data = {}  # fname -> (frame, face_obj, bbox)
-        for fname in frame_files:
-            frame = cv2.imread(os.path.join(frames_dir, fname))
-            if frame is None:
-                continue
-            face_obj = _detect_face_in_frame(frame, target_embedding)
-            if face_obj is not None:
-                per_frame_data[fname] = (frame, face_obj, face_obj.bbox.tolist())
-
-        if not per_frame_data:
-            continue
-
-        # Compute consistent crop size from the largest face bbox across all frames
-        all_bboxes = [bbox for _, _, bbox in per_frame_data.values()]
-        max_face_size = max(
-            max(b[2] - b[0], b[3] - b[1]) for b in all_bboxes
-        )
-        crop_size = int(max_face_size * 1.5)
-
-        # Crop each frame at a square region centered on the face
-        crops_manifest = {}
-        for fname, (frame, face_obj, bbox) in per_frame_data.items():
-            h, w = frame.shape[:2]
-
-            cx = (bbox[0] + bbox[2]) / 2
-            cy = (bbox[1] + bbox[3]) / 2
-            half = crop_size / 2
-
-            x1 = int(max(0, cx - half))
-            y1 = int(max(0, cy - half))
-            x2 = int(min(w, x1 + crop_size))
-            y2 = int(min(h, y1 + crop_size))
-            # Adjust start if crop was clamped at the end
-            x1 = int(max(0, x2 - crop_size))
-            y1 = int(max(0, y2 - crop_size))
-
-            crop = frame[y1:y2, x1:x2]
-            cv2.imwrite(os.path.join(clip_dir, fname), crop)
-            crops_manifest[fname] = (x1, y1, x2, y2)
-
-        actual_crop_h = y2 - y1
-        actual_crop_w = x2 - x1
-
-        manifests[face_id] = {
-            "crop_dir": clip_dir,
-            "crops": crops_manifest,
-            "crop_size": (actual_crop_w, actual_crop_h),
-        }
-
-    if progress_callback:
-        progress_callback(1.0)
-
-    return manifests
-
-
 def swap_single_face_clip(
-    clip_dir: str,
-    output_dir: str,
-    target_embedding: np.ndarray,
-    adapter: FaceSwapAdapter,
-    progress_callback=None,
+        clip_dir: str,
+        output_dir: str,
+        target_embedding: np.ndarray,
+        adapter: FaceSwapAdapter,
+        progress_callback=None,
 ) -> None:
     """Run face swap on a single face's cropped clip frames.
 
-    Reads cropped frames from clip_dir, detects the face in each crop,
-    swaps it, and writes the result to output_dir with the same filenames.
+    Reads cropped frames from clip_dir (produced by face_tracker.extract_face_clips),
+    detects the face in each crop, swaps it, writes result to output_dir.
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -220,15 +119,15 @@ def swap_single_face_clip(
 
 
 def composite_swapped_faces(
-    frames_dir: str,
-    output_dir: str,
-    manifests: dict[str, dict],
-    swapped_base_dir: str,
+        frames_dir: str,
+        output_dir: str,
+        manifests: dict[str, dict],
+        swapped_base_dir: str,
 ) -> None:
     """Composite swapped face crops back onto original frames.
 
-    For each frame, copies the original, then pastes each face's swapped crop
-    at the recorded position.
+    For each frame, reads the original, pastes each face's swapped crop
+    at the recorded position, writes the result.
     """
     os.makedirs(output_dir, exist_ok=True)
 
@@ -270,37 +169,34 @@ def composite_swapped_faces(
 
 
 def swap_faces_pipeline(
-    frames_dir: str,
-    output_dir: str,
-    faces_json: dict,
-    selected_face_ids: list[str],
-    adapter: FaceSwapAdapter | None = None,
-    progress_callback=None,
+        manifests: dict[str, dict],
+        faces_json: dict,
+        frames_dir: str,
+        output_dir: str,
+        adapter: FaceSwapAdapter | None = None,
+        progress_callback=None,
 ) -> None:
-    """Full face swap pipeline: crop per-face clips -> swap in parallel -> composite.
+    """Swap faces in pre-cropped clips and composite back onto original frames.
 
-    Drop-in replacement for the old swap_faces_in_video (same parameter signature).
+    Args:
+        manifests: from face_tracker.extract_face_clips() — clip dirs + crop coords
+        faces_json: loaded faces.json with embeddings
+        frames_dir: original full frames directory
+        output_dir: where to write final composited frames
+        adapter: face swap adapter (defaults to InsightFaceSwapAdapter)
+        progress_callback: called with float 0.0-1.0
     """
     if adapter is None:
         adapter = InsightFaceSwapAdapter()
 
-    base_dir = os.path.dirname(frames_dir)  # e.g., server/storage/{video_id}
-    clips_dir = os.path.join(base_dir, "face_clips")
+    base_dir = os.path.dirname(frames_dir)
     swapped_clips_dir = os.path.join(base_dir, "swapped_clips")
 
-    # Phase 1: Crop per-face clips
     if progress_callback:
         progress_callback(0.0)
 
-    manifests = crop_face_clips(
-        frames_dir, faces_json, selected_face_ids, clips_dir
-    )
-
-    if progress_callback:
-        progress_callback(0.2)
-
     if not manifests:
-        # No faces detected in any frame — copy originals through
+        # No face clips — copy originals through unchanged
         os.makedirs(output_dir, exist_ok=True)
         for f in os.listdir(frames_dir):
             if f.startswith("frame_") and f.endswith(".jpg"):
@@ -309,35 +205,129 @@ def swap_faces_pipeline(
             progress_callback(1.0)
         return
 
-    # Phase 2: Swap each face clip in parallel
+    # Phase 1: Swap each face clip in parallel
     face_ids_to_process = list(manifests.keys())
     total_faces = len(face_ids_to_process)
 
     def face_progress(face_idx):
         def callback(p):
-            overall = 0.2 + 0.6 * (face_idx + p) / total_faces
+            overall = 0.7 * (face_idx + p) / total_faces
             if progress_callback:
                 progress_callback(overall)
+
         return callback
 
     def swap_one_face(args):
         face_id, idx = args
         face_data = faces_json["faces"][face_id]
         target_embedding = np.array(face_data["embedding"])
-        clip_dir = manifests[face_id]["crop_dir"]
+        clip_dir = manifests[face_id]["clip_dir"]
         swap_out = os.path.join(swapped_clips_dir, face_id)
         swap_single_face_clip(
             clip_dir, swap_out, target_embedding, adapter, face_progress(idx)
         )
 
     with ThreadPoolExecutor(max_workers=min(total_faces, 4)) as executor:
-        executor.map(swap_one_face, [(fid, i) for i, fid in enumerate(face_ids_to_process)])
+        list(executor.map(swap_one_face, [(fid, i) for i, fid in enumerate(face_ids_to_process)]))
 
     if progress_callback:
-        progress_callback(0.8)
+        progress_callback(0.7)
 
-    # Phase 3: Composite swapped faces back onto original frames
+    # Phase 2: Composite swapped faces back onto original frames
     composite_swapped_faces(frames_dir, output_dir, manifests, swapped_clips_dir)
 
     if progress_callback:
         progress_callback(1.0)
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from services import video as video_service
+    from services.face_tracker import detect_and_cluster, save_faces_json, load_faces_json, extract_face_clips
+
+    # Usage: python -m services.face_swapper <video_path> [output_dir]
+    if len(sys.argv) < 2:
+        print("Usage: python -m services.face_swapper <video_path> [output_dir]")
+        print("  video_path: path to an .mp4/.mov/.webm video file")
+        print("  output_dir: where to write results (default: server/test_swap_output/)")
+        sys.exit(1)
+
+    VIDEO_PATH = os.path.abspath(sys.argv[1])
+    if not os.path.exists(VIDEO_PATH):
+        print(f"Error: video not found: {VIDEO_PATH}")
+        sys.exit(1)
+
+    TEST_DIR = sys.argv[2] if len(sys.argv) > 2 else os.path.join(os.path.dirname(__file__), "..", "test_swap_output")
+    TEST_DIR = os.path.abspath(TEST_DIR)
+
+    os.makedirs(TEST_DIR, exist_ok=True)
+    frames_dir = os.path.join(TEST_DIR, "frames")
+    swapped_dir = os.path.join(TEST_DIR, "swapped")
+    faces_json_path = os.path.join(TEST_DIR, "faces.json")
+
+    # Step 1: Extract frames + audio
+    print(f"[1/6] Extracting frames from {VIDEO_PATH}...")
+    video_info = video_service.extract_frames(VIDEO_PATH, frames_dir)
+    fps = video_info["fps"]
+    print(f"       {video_info['total_frames']} frames at {fps} fps")
+
+    audio_path = os.path.join(TEST_DIR, "audio.aac")
+    video_service.extract_audio(VIDEO_PATH, audio_path)
+
+    # Step 2: Detect & cluster faces
+    print("[2/6] Detecting faces...")
+    faces_data = detect_and_cluster(frames_dir, TEST_DIR, subsample=5)
+    save_faces_json(faces_data, video_info, faces_json_path)
+    faces_json = load_faces_json(faces_json_path)
+
+    face_ids = list(faces_json["faces"].keys())
+    print(f"       Found {len(face_ids)} face(s): {face_ids}")
+    if not face_ids:
+        print("No faces found. Exiting.")
+        sys.exit(1)
+
+    # Swap the first detected face
+    selected = [face_ids[0]]
+    print(f"       Swapping: {selected}")
+
+    # Step 3: Extract face clips (face_tracker responsibility)
+    print("[3/6] Extracting face clips...")
+    clips_dir = os.path.join(TEST_DIR, "face_clips")
+    manifests = extract_face_clips(frames_dir, faces_json, selected, clips_dir)
+    print(f"       Created clips for {list(manifests.keys())}")
+
+    # Step 4: Swap faces in clips (face_swapper responsibility)
+    print("[4/6] Swapping faces in clips...")
+
+    def on_progress(p):
+        print(f"       progress: {p:.0%}", end="\r")
+
+    swap_faces_pipeline(manifests, faces_json, frames_dir, swapped_dir, progress_callback=on_progress)
+    print()
+
+    # Step 5: Reassemble original video
+    original_out = os.path.join(TEST_DIR, "original_reassembled.mp4")
+    print("[5/6] Reassembling original video...")
+    video_service.reassemble_video(
+        frames_dir,
+        audio_path if os.path.exists(audio_path) else None,
+        original_out,
+        fps,
+    )
+
+    # Step 6: Reassemble swapped video
+    swapped_out = os.path.join(TEST_DIR, "swapped_output.mp4")
+    print("[6/6] Reassembling swapped video...")
+    video_service.reassemble_video(
+        swapped_dir,
+        audio_path if os.path.exists(audio_path) else None,
+        swapped_out,
+        fps,
+    )
+
+    print()
+    print("Done! Output files:")
+    print(f"  Original: {original_out}")
+    print(f"  Swapped:  {swapped_out}")

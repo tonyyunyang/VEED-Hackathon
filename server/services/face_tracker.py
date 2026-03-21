@@ -192,6 +192,100 @@ def detect_and_cluster(
     return {"faces": faces_data}
 
 
+def extract_face_clips(
+    frames_dir: str,
+    faces_json: dict,
+    selected_face_ids: list[str],
+    output_base_dir: str,
+) -> dict[str, dict]:
+    """Extract per-face cropped frame sequences from full frames.
+
+    For each selected face:
+    1. Re-detect the face on every frame using embedding matching
+    2. Crop a padded square region around the face
+    3. Save cropped frames to {output_base_dir}/{face_id}/frame_XXXX.jpg
+
+    Returns a manifest dict:
+    {
+        "face_0": {
+            "clip_dir": "/path/to/face_0/",
+            "crops": {
+                "frame_0001.jpg": (x1, y1, x2, y2),
+            },
+            "crop_size": (width, height),
+        }
+    }
+    """
+    app = _get_app()
+    frame_files = sorted(
+        f for f in os.listdir(frames_dir)
+        if f.startswith("frame_") and f.endswith(".jpg")
+    )
+    manifests = {}
+
+    for face_id in selected_face_ids:
+        face_data = faces_json["faces"][face_id]
+        target_embedding = np.array(face_data["embedding"])
+
+        clip_dir = os.path.join(output_base_dir, face_id)
+        os.makedirs(clip_dir, exist_ok=True)
+
+        # Single pass: detect face on every frame, cache frame + bbox
+        per_frame_data = {}  # fname -> (frame, bbox)
+        for fname in frame_files:
+            frame = cv2.imread(os.path.join(frames_dir, fname))
+            if frame is None:
+                continue
+            detected = app.get(frame)
+            for face in detected:
+                sim = _cosine_similarity(face.normed_embedding, target_embedding)
+                if sim >= 0.4:
+                    per_frame_data[fname] = (frame, face.bbox.tolist())
+                    break
+
+        if not per_frame_data:
+            continue
+
+        # Compute consistent crop size from the largest face across all frames
+        all_bboxes = [bbox for _, bbox in per_frame_data.values()]
+        max_face_size = max(
+            max(b[2] - b[0], b[3] - b[1]) for b in all_bboxes
+        )
+        crop_size = int(max_face_size * 1.5)
+
+        # Crop each frame at a square region centered on the face
+        crops_manifest = {}
+        for fname, (frame, bbox) in per_frame_data.items():
+            h, w = frame.shape[:2]
+
+            cx = (bbox[0] + bbox[2]) / 2
+            cy = (bbox[1] + bbox[3]) / 2
+            half = crop_size / 2
+
+            x1 = int(max(0, cx - half))
+            y1 = int(max(0, cy - half))
+            x2 = int(min(w, x1 + crop_size))
+            y2 = int(min(h, y1 + crop_size))
+            # Adjust start if crop was clamped at the end
+            x1 = int(max(0, x2 - crop_size))
+            y1 = int(max(0, y2 - crop_size))
+
+            crop = frame[y1:y2, x1:x2]
+            cv2.imwrite(os.path.join(clip_dir, fname), crop)
+            crops_manifest[fname] = (x1, y1, x2, y2)
+
+        actual_h = y2 - y1
+        actual_w = x2 - x1
+
+        manifests[face_id] = {
+            "clip_dir": clip_dir,
+            "crops": crops_manifest,
+            "crop_size": (actual_w, actual_h),
+        }
+
+    return manifests
+
+
 def save_faces_json(faces_data: dict, video_info: dict, output_path: str) -> None:
     data = {
         "fps": video_info["fps"],
