@@ -10,7 +10,14 @@ import {
   TooltipPopup,
   TooltipProvider,
 } from "./ui/tooltip";
-import { Play, Pause, Scissors, Check, ScanFace } from "lucide-react";
+import {
+  Play,
+  Pause,
+  Scissors,
+  Check,
+  ScanFace,
+  SmilePlus,
+} from "lucide-react";
 
 /**
  * Generates a set of colors with high contrast between them and at least 4.6:1 contrast against black.
@@ -364,6 +371,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     return () => window.removeEventListener("resize", updateSize);
   }, []);
 
+  const handleFaceSwap = () => {
+    const exportData = {
+      video_metadata: videoData.video_metadata,
+      frames: Object.entries(videoData.frames).reduce(
+        (acc: any, [frameIdx, people]) => {
+          const filteredPeople = (people as any[]).filter((p) =>
+            selectedPersonIds.includes(p.id),
+          );
+
+          if (filteredPeople.length > 0) {
+            acc[frameIdx] = filteredPeople;
+          }
+          return acc;
+        },
+        {},
+      ),
+    };
+
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "selected_faces.json";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
   // Handle video metadata
   const handleLoadedMetadata = () => {
     if (videoRef.current) {
@@ -793,6 +830,21 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         }
                       />
                       <TooltipPopup>Control Faces</TooltipPopup>
+                    </Tooltip>
+
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="sm"
+                            onClick={handleFaceSwap}
+                            className="h-9 px-4 font-semibold shadow-sm hover:shadow-md transition-all active:scale-95"
+                          >
+                            <SmilePlus className="w-4 h-4 mr-2" />
+                          </Button>
+                        }
+                      />
+                      <TooltipPopup>Swap Faces</TooltipPopup>
                     </Tooltip>
                   </ToolbarGroup>
                 </div>
