@@ -1,3 +1,14 @@
+"""
+VEED Face Swap API server.
+
+Pipeline:
+  1. POST /api/upload          → save video, get video_id
+  2. POST /api/detect-faces    → extract frames, detect & cluster faces
+  3. POST /api/swap            → for each face: pick source → call FaceFusion
+  4. GET  /api/status/{job_id} → poll progress
+  5. GET  /api/download/{job_id} → download the swapped video
+"""
+
 import os
 import uuid
 import asyncio
@@ -19,6 +30,7 @@ from config import (
     FACEFUSION_THREAD_COUNT,
 )
 from services import video, face_tracker
+from services.source_picker import pick_source
 
 app = FastAPI(title="VEED Face Swap")
 
@@ -30,36 +42,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# In-memory job store: job_id → {status, progress, error, video_id}
 jobs: dict[str, dict] = {}
 
+POLL_INTERVAL_SECONDS = 2
 
-def _video_dir(video_id: str) -> str:
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+
+def _get_video_dir(video_id: str) -> str:
+    """Return the storage directory for a video, or 404."""
     path = os.path.join(STORAGE_DIR, video_id)
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Video not found")
     return path
 
 
-def _find_original(vdir: str) -> str:
-    for f in os.listdir(vdir):
-        if f.startswith("original"):
-            return os.path.join(vdir, f)
+def _find_original_video(video_dir: str) -> str:
+    """Find the uploaded original video file inside a video directory."""
+    for filename in os.listdir(video_dir):
+        if filename.startswith("original"):
+            return os.path.join(video_dir, filename)
     raise HTTPException(status_code=404, detail="Original video not found")
+
+
+def _resolve_face_crop_path(video_dir: str, face_data: dict) -> str:
+    """Return the best available face crop path for source matching.
+
+    Prefers the high-quality padded crop; falls back to the tight thumbnail.
+    """
+    crop_path = os.path.join(video_dir, face_data["crop_path"])
+    if os.path.exists(crop_path):
+        return crop_path
+    return os.path.join(video_dir, face_data["thumbnail_path"])
+
+
+def _fail_job(job_id: str, error: str) -> None:
+    jobs[job_id] |= {"status": "failed", "error": error}
+
+
+# ── Upload & detect ──────────────────────────────────────────────────────
 
 
 @app.post("/api/upload", response_model=UploadResponse)
 async def upload_video(file: UploadFile = File(...)):
-    allowed = {".mp4", ".mov", ".webm", ".avi"}
+    """Upload a video file and receive a video_id for subsequent calls."""
+    allowed_extensions = {".mp4", ".mov", ".webm", ".avi"}
     ext = os.path.splitext(file.filename or "")[1].lower()
-    if ext not in allowed:
+    if ext not in allowed_extensions:
         raise HTTPException(status_code=400, detail=f"Invalid video format: {ext}")
 
     video_id = str(uuid.uuid4())[:8]
     video_dir = os.path.join(STORAGE_DIR, video_id)
     os.makedirs(video_dir, exist_ok=True)
 
-    video_path = os.path.join(video_dir, f"original{ext}")
-    with open(video_path, "wb") as f:
+    with open(os.path.join(video_dir, f"original{ext}"), "wb") as f:
         f.write(await file.read())
 
     return UploadResponse(video_id=video_id)
@@ -67,138 +105,194 @@ async def upload_video(file: UploadFile = File(...)):
 
 @app.post("/api/detect-faces", response_model=DetectFacesResponse)
 async def detect_faces(req: DetectFacesRequest):
-    vdir = _video_dir(req.video_id)
-    original = _find_original(vdir)
-    frames_dir = os.path.join(vdir, "frames")
+    """Extract frames from the video, detect and cluster faces."""
+    video_dir = _get_video_dir(req.video_id)
+    original_video = _find_original_video(video_dir)
+    frames_dir = os.path.join(video_dir, "frames")
 
     loop = asyncio.get_event_loop()
-    video_info = await loop.run_in_executor(None, video.extract_frames, original, frames_dir)
-    faces_data = await loop.run_in_executor(
-        None, face_tracker.detect_and_cluster, frames_dir, vdir, FRAME_SUBSAMPLE
+
+    # Extract video frames to JPEG files
+    video_info = await loop.run_in_executor(
+        None, video.extract_frames, original_video, frames_dir
     )
-    face_tracker.save_faces_json(faces_data, video_info, os.path.join(vdir, "faces.json"))
 
-    faces_list = [
-        FaceInfo(
-            face_id=fid,
-            thumbnail=fdata["thumbnail"],
-            age=fdata["age"],
-            gender=fdata["gender"],
-            frame_count=fdata["frame_count"],
+    # Detect and cluster faces across sub-sampled frames
+    faces_data = await loop.run_in_executor(
+        None, face_tracker.detect_and_cluster, frames_dir, video_dir, FRAME_SUBSAMPLE
+    )
+
+    face_tracker.save_faces_json(faces_data, video_info, os.path.join(video_dir, "faces.json"))
+
+    return DetectFacesResponse(
+        video_id=req.video_id,
+        faces=[
+            FaceInfo(
+                face_id=face_id,
+                thumbnail=data["thumbnail"],
+                age=data["age"],
+                gender=data["gender"],
+                frame_count=data["frame_count"],
+            )
+            for face_id, data in faces_data["faces"].items()
+        ],
+    )
+
+
+# ── FaceFusion API client ───────────────────────────────────────────────
+
+
+async def _submit_facefusion_swap(
+    client: httpx.AsyncClient,
+    source_image_path: str,
+    target_video_path: str,
+) -> str:
+    """Upload source + target to FaceFusion /api/swap. Returns the remote job_id."""
+    with open(source_image_path, "rb") as source_file, \
+         open(target_video_path, "rb") as target_file:
+        response = await client.post(
+            f"{FACEFUSION_API_URL}/api/swap",
+            files={
+                "source": (os.path.basename(source_image_path), source_file, "image/jpeg"),
+                "target": (os.path.basename(target_video_path), target_file, "video/mp4"),
+            },
+            data={
+                "face_swapper_model": FACEFUSION_SWAP_MODEL,
+                "face_swapper_pixel_boost": FACEFUSION_PIXEL_BOOST,
+                "face_enhancer": str(FACEFUSION_ENHANCER).lower(),
+                "execution_provider": FACEFUSION_EXECUTION_PROVIDER,
+                "output_video_quality": str(FACEFUSION_VIDEO_QUALITY),
+                "execution_thread_count": str(FACEFUSION_THREAD_COUNT),
+                "face_selector_mode": "one",
+            },
         )
-        for fid, fdata in faces_data["faces"].items()
-    ]
-    return DetectFacesResponse(video_id=req.video_id, faces=faces_list)
+    if response.status_code != 200:
+        raise RuntimeError(f"FaceFusion API error {response.status_code}: {response.text}")
+    return response.json()["job_id"]
 
 
-async def _run_swap_job(job_id: str, video_id: str, face_ids: list[str]):
+async def _wait_for_facefusion_job(
+    client: httpx.AsyncClient,
+    remote_job_id: str,
+    local_job_id: str,
+    progress_start: float,
+    progress_range: float,
+) -> None:
+    """Poll FaceFusion /api/status until completed, updating local job progress.
+
+    Maps the remote 0→1 progress into the [progress_start, progress_start+progress_range] window.
+    """
+    while True:
+        await asyncio.sleep(POLL_INTERVAL_SECONDS)
+        response = await client.get(f"{FACEFUSION_API_URL}/api/status/{remote_job_id}")
+        if response.status_code != 200:
+            raise RuntimeError("FaceFusion status check failed")
+
+        remote_status = response.json()
+        jobs[local_job_id]["progress"] = progress_start + remote_status["progress"] * progress_range
+
+        if remote_status["status"] == "completed":
+            return
+        if remote_status["status"] == "failed":
+            raise RuntimeError(remote_status.get("error", "FaceFusion processing failed"))
+
+
+async def _download_facefusion_result(
+    client: httpx.AsyncClient,
+    remote_job_id: str,
+    save_to: str,
+) -> None:
+    """Download the output video from FaceFusion and clean up the remote job."""
+    response = await client.get(f"{FACEFUSION_API_URL}/api/download/{remote_job_id}")
+    if response.status_code != 200:
+        raise RuntimeError("Failed to download FaceFusion result")
+    with open(save_to, "wb") as f:
+        f.write(response.content)
+    await client.delete(f"{FACEFUSION_API_URL}/api/job/{remote_job_id}")
+
+
+# ── Swap job (background task) ───────────────────────────────────────────
+
+
+async def _run_swap_job(local_job_id: str, video_id: str, face_ids: list[str]):
+    """Background task: pick sources, chain FaceFusion swaps, optional lipsync.
+
+    For N faces, runs N sequential FaceFusion calls. Each call swaps one face.
+    The output of pass i becomes the input of pass i+1, so all faces end up swapped.
+
+    Example with 3 faces:
+      Pass 0: source=alice.jpg, target=original.mp4        → swap_pass_0.mp4
+      Pass 1: source=bob.jpg,   target=swap_pass_0.mp4     → swap_pass_1.mp4
+      Pass 2: source=carol.jpg, target=swap_pass_1.mp4     → swap_pass_2.mp4 → output.mp4
+    """
     try:
-        vdir = os.path.join(STORAGE_DIR, video_id)
-        faces_json = face_tracker.load_faces_json(os.path.join(vdir, "faces.json"))
+        video_dir = os.path.join(STORAGE_DIR, video_id)
+        faces_json = face_tracker.load_faces_json(os.path.join(video_dir, "faces.json"))
 
-        for fid in face_ids:
-            if fid not in faces_json["faces"]:
-                jobs[job_id] |= {"status": "failed", "error": f"Unknown face ID: {fid}"}
+        # Validate all face IDs upfront
+        for face_id in face_ids:
+            if face_id not in faces_json["faces"]:
+                _fail_job(local_job_id, f"Unknown face ID: {face_id}")
                 return
 
-        jobs[job_id] |= {"status": "processing", "progress": 0.05}
+        jobs[local_job_id] |= {"status": "processing", "progress": 0.05}
 
-        original = None
-        for f in os.listdir(vdir):
-            if f.startswith("original"):
-                original = os.path.join(vdir, f)
+        original_video = None
+        for filename in os.listdir(video_dir):
+            if filename.startswith("original"):
+                original_video = os.path.join(video_dir, filename)
                 break
-        if not original:
-            jobs[job_id] |= {"status": "failed", "error": "Original video not found"}
+        if not original_video:
+            _fail_job(local_job_id, "Original video not found")
             return
 
-        # Resolve source face image — may be absolute (library) or relative (crop)
-        face_data = faces_json["faces"][face_ids[0]]
-        raw_source = face_data["source_path"]
-        source_path = raw_source if os.path.isabs(raw_source) else os.path.join(vdir, raw_source)
-        if not os.path.exists(source_path):
-            source_path = os.path.join(vdir, face_data["thumbnail_path"])
-        if not os.path.exists(source_path):
-            jobs[job_id] |= {"status": "failed", "error": "Source face image not found"}
-            return
+        # ── Step 1: Pick a source image for each face ────────────────────
+        # Compares each person's face crop against picture_example/ library.
+        source_image_per_face: dict[str, str] = {}
+        for face_id in face_ids:
+            face_data = faces_json["faces"][face_id]
+            face_crop_path = _resolve_face_crop_path(video_dir, face_data)
+            source_image_per_face[face_id] = pick_source(face_crop_path)
 
-        jobs[job_id]["progress"] = 0.1
+        jobs[local_job_id]["progress"] = 0.10
 
-        # Call FaceFusion API
+        # ── Step 2: Chain FaceFusion swap calls (one per face) ───────────
+        # Budget: 10%→(80% or 95%) for swaps, rest for lipsync.
+        num_faces = len(face_ids)
+        lipsync_budget = 0.15 if ENABLE_LIPSYNC else 0.0
+        total_swap_budget = 0.85 - lipsync_budget  # e.g. 0.70 with lipsync, 0.85 without
+        per_face_budget = total_swap_budget / num_faces
+
+        current_video = original_video  # input to the next swap pass
+
         async with httpx.AsyncClient(timeout=None) as client:
-            with open(source_path, "rb") as src_f, open(original, "rb") as tgt_f:
-                resp = await client.post(
-                    f"{FACEFUSION_API_URL}/api/swap",
-                    files={
-                        "source": (os.path.basename(source_path), src_f, "image/jpeg"),
-                        "target": (os.path.basename(original), tgt_f, "video/mp4"),
-                    },
-                    data={
-                        "face_swapper_model": FACEFUSION_SWAP_MODEL,
-                        "face_swapper_pixel_boost": FACEFUSION_PIXEL_BOOST,
-                        "face_enhancer": str(FACEFUSION_ENHANCER).lower(),
-                        "execution_provider": FACEFUSION_EXECUTION_PROVIDER,
-                        "output_video_quality": str(FACEFUSION_VIDEO_QUALITY),
-                        "execution_thread_count": str(FACEFUSION_THREAD_COUNT),
-                        "face_selector_mode": "one",
-                    },
+            for pass_index, face_id in enumerate(face_ids):
+                source_image = source_image_per_face[face_id]
+                pass_output = os.path.join(video_dir, f"swap_pass_{pass_index}.mp4")
+                progress_start = 0.10 + pass_index * per_face_budget
+
+                remote_job_id = await _submit_facefusion_swap(client, source_image, current_video)
+                await _wait_for_facefusion_job(
+                    client, remote_job_id, local_job_id, progress_start, per_face_budget
                 )
+                await _download_facefusion_result(client, remote_job_id, pass_output)
 
-            if resp.status_code != 200:
-                jobs[job_id] |= {
-                    "status": "failed",
-                    "error": f"FaceFusion API error {resp.status_code}: {resp.text}",
-                }
-                return
+                current_video = pass_output  # feed into next pass
 
-            ff_job_id = resp.json()["job_id"]
+            # current_video now contains all faces swapped
+            final_output = os.path.join(video_dir, "output.mp4")
 
-            # Poll for progress
-            while True:
-                await asyncio.sleep(2)
-                status_resp = await client.get(f"{FACEFUSION_API_URL}/api/status/{ff_job_id}")
-                if status_resp.status_code != 200:
-                    jobs[job_id] |= {"status": "failed", "error": "FaceFusion status check failed"}
-                    return
-
-                ff = status_resp.json()
-                swap_weight = 0.65 if ENABLE_LIPSYNC else 0.85
-                jobs[job_id]["progress"] = 0.1 + ff["progress"] * swap_weight
-
-                if ff["status"] == "completed":
-                    break
-                if ff["status"] == "failed":
-                    jobs[job_id] |= {
-                        "status": "failed",
-                        "error": ff.get("error", "FaceFusion processing failed"),
-                    }
-                    return
-
-            # Download swap result
-            swap_output = os.path.join(vdir, "swap_output.mp4")
-            dl = await client.get(f"{FACEFUSION_API_URL}/api/download/{ff_job_id}")
-            if dl.status_code != 200:
-                jobs[job_id] |= {"status": "failed", "error": "Failed to download result"}
-                return
-
-            with open(swap_output, "wb") as out_f:
-                out_f.write(dl.content)
-
-            # Cleanup remote swap job
-            await client.delete(f"{FACEFUSION_API_URL}/api/job/{ff_job_id}")
-
-            output_path = os.path.join(vdir, "output.mp4")
-
-            # Lipsync pass (uses original audio + swapped video)
+            # ── Step 3 (optional): Lipsync pass ─────────────────────────
             if ENABLE_LIPSYNC:
-                jobs[job_id]["progress"] = 0.80
+                jobs[local_job_id]["progress"] = 0.80
 
-                with open(original, "rb") as audio_f, open(swap_output, "rb") as vid_f:
-                    ls_resp = await client.post(
+                with open(original_video, "rb") as audio_file, \
+                     open(current_video, "rb") as swapped_file:
+                    lipsync_response = await client.post(
                         f"{FACEFUSION_API_URL}/api/lipsync",
                         files={
-                            "audio": (os.path.basename(original), audio_f, "video/mp4"),
-                            "target": ("swap_output.mp4", vid_f, "video/mp4"),
+                            "audio": (os.path.basename(original_video), audio_file, "video/mp4"),
+                            "target": ("swapped.mp4", swapped_file, "video/mp4"),
                         },
                         data={
                             "execution_provider": FACEFUSION_EXECUTION_PROVIDER,
@@ -207,82 +301,86 @@ async def _run_swap_job(job_id: str, video_id: str, face_ids: list[str]):
                         },
                     )
 
-                if ls_resp.status_code != 200:
-                    # Lipsync failure is non-fatal — fall back to swap-only output
-                    os.rename(swap_output, output_path)
+                if lipsync_response.status_code != 200:
+                    # Lipsync failure is non-fatal — use swap-only output
+                    os.rename(current_video, final_output)
                 else:
-                    ls_job_id = ls_resp.json()["job_id"]
-
-                    while True:
-                        await asyncio.sleep(2)
-                        ls_status = await client.get(f"{FACEFUSION_API_URL}/api/status/{ls_job_id}")
-                        if ls_status.status_code != 200:
-                            os.rename(swap_output, output_path)
-                            break
-                        ls = ls_status.json()
-                        jobs[job_id]["progress"] = 0.80 + ls["progress"] * 0.15
-
-                        if ls["status"] == "completed":
-                            ls_dl = await client.get(f"{FACEFUSION_API_URL}/api/download/{ls_job_id}")
-                            if ls_dl.status_code == 200:
-                                with open(output_path, "wb") as out_f:
-                                    out_f.write(ls_dl.content)
-                            else:
-                                os.rename(swap_output, output_path)
-                            await client.delete(f"{FACEFUSION_API_URL}/api/job/{ls_job_id}")
-                            break
-                        if ls["status"] == "failed":
-                            # Non-fatal — use swap output
-                            os.rename(swap_output, output_path)
-                            await client.delete(f"{FACEFUSION_API_URL}/api/job/{ls_job_id}")
-                            break
+                    lipsync_job_id = lipsync_response.json()["job_id"]
+                    try:
+                        await _wait_for_facefusion_job(
+                            client, lipsync_job_id, local_job_id, 0.80, 0.15
+                        )
+                        await _download_facefusion_result(client, lipsync_job_id, final_output)
+                    except RuntimeError:
+                        # Lipsync failure is non-fatal
+                        os.rename(current_video, final_output)
             else:
-                os.rename(swap_output, output_path)
+                os.rename(current_video, final_output)
 
-        jobs[job_id] |= {"progress": 1.0, "status": "completed"}
+            # Clean up intermediate swap pass files
+            for i in range(num_faces):
+                intermediate = os.path.join(video_dir, f"swap_pass_{i}.mp4")
+                if intermediate != final_output and os.path.exists(intermediate):
+                    os.remove(intermediate)
+
+        jobs[local_job_id] |= {"progress": 1.0, "status": "completed"}
 
     except Exception as e:
-        jobs[job_id] |= {"status": "failed", "error": str(e)}
+        _fail_job(local_job_id, str(e))
+
+
+# ── Swap / status / download endpoints ───────────────────────────────────
 
 
 @app.post("/api/swap", response_model=SwapResponse)
 async def swap_faces(req: SwapRequest):
-    vdir = _video_dir(req.video_id)
-    faces_path = os.path.join(vdir, "faces.json")
+    """Start a face-swap job. Returns a job_id to poll for progress."""
+    video_dir = _get_video_dir(req.video_id)
+    faces_path = os.path.join(video_dir, "faces.json")
     if not os.path.exists(faces_path):
         raise HTTPException(status_code=400, detail="Run detect-faces first")
 
     faces_json = face_tracker.load_faces_json(faces_path)
-    for fid in req.face_ids:
-        if fid not in faces_json["faces"]:
-            raise HTTPException(status_code=400, detail=f"Unknown face ID: {fid}")
+    for face_id in req.face_ids:
+        if face_id not in faces_json["faces"]:
+            raise HTTPException(status_code=400, detail=f"Unknown face ID: {face_id}")
 
     job_id = str(uuid.uuid4())[:8]
-    jobs[job_id] = {"status": "pending", "progress": 0.0, "error": None, "video_id": req.video_id}
+    jobs[job_id] = {
+        "status": "pending",
+        "progress": 0.0,
+        "error": None,
+        "video_id": req.video_id,
+    }
     asyncio.create_task(_run_swap_job(job_id, req.video_id, req.face_ids))
     return SwapResponse(job_id=job_id)
 
 
 @app.get("/api/status/{job_id}", response_model=StatusResponse)
 async def get_status(job_id: str):
+    """Poll the progress of a swap job."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    j = jobs[job_id]
-    return StatusResponse(status=j["status"], progress=j["progress"], error=j.get("error"))
+    job = jobs[job_id]
+    return StatusResponse(status=job["status"], progress=job["progress"], error=job.get("error"))
 
 
 @app.get("/api/download/{job_id}")
 async def download_video(job_id: str):
+    """Download the finished swapped video."""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-    j = jobs[job_id]
-    if j["status"] != "completed":
+    job = jobs[job_id]
+    if job["status"] != "completed":
         raise HTTPException(status_code=400, detail="Job not completed")
 
-    output_path = os.path.join(STORAGE_DIR, j["video_id"], "output.mp4")
+    output_path = os.path.join(STORAGE_DIR, job["video_id"], "output.mp4")
     if not os.path.exists(output_path):
         raise HTTPException(status_code=404, detail="Output file not found")
     return FileResponse(output_path, media_type="video/mp4", filename="swapped.mp4")
+
+
+# ── Entrypoint ───────────────────────────────────────────────────────────
 
 
 if __name__ == "__main__":

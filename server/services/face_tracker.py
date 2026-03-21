@@ -1,8 +1,20 @@
+"""
+Face detection and clustering from video frames.
+
+Only identifies and groups faces — no source selection, no swapping.
+
+Output per face:
+  - thumbnail    : base64 data-URI for the UI
+  - thumbnail_path : small JPEG on disk
+  - crop_path      : high-quality padded crop (used by source_picker for matching)
+  - age, gender, frame_count
+"""
+
 import os
 import json
 import base64
 import random
-from collections import defaultdict
+from collections import Counter
 
 import cv2
 import numpy as np
@@ -12,18 +24,38 @@ from config import DUMMY_TRACKING
 if not DUMMY_TRACKING:
     from insightface.app import FaceAnalysis
 
-_app = None
+_face_analyser = None
+
+IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+SIMILARITY_THRESHOLD = 0.4
 
 
-def _get_app():
-    global _app
-    if _app is None:
-        _app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
-        _app.prepare(ctx_id=0, det_size=(640, 640))
-    return _app
+def _get_face_analyser():
+    """Lazy-init the InsightFace model (heavy, only loaded once)."""
+    global _face_analyser
+    if _face_analyser is None:
+        _face_analyser = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+        _face_analyser.prepare(ctx_id=0, det_size=(640, 640))
+    return _face_analyser
 
 
-def _crop_face_thumbnail(frame: np.ndarray, bbox: list[float], size: int = 112) -> str:
+def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
+    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
+
+
+# ── Image helpers ────────────────────────────────────────────────────────
+
+
+def _list_frame_files(frames_dir: str) -> list[str]:
+    """Return sorted frame filenames (frame_0001.jpg, frame_0002.jpg, …)."""
+    return sorted(
+        f for f in os.listdir(frames_dir)
+        if f.startswith("frame_") and f.endswith(".jpg")
+    )
+
+
+def _make_base64_thumbnail(frame: np.ndarray, bbox: list[float], size: int = 112) -> str:
+    """Crop the face from *frame*, resize to *size*×*size*, return as base64 data-URI."""
     x1, y1, x2, y2 = [int(v) for v in bbox]
     h, w = frame.shape[:2]
     x1, y1 = max(0, x1), max(0, y1)
@@ -33,263 +65,185 @@ def _crop_face_thumbnail(frame: np.ndarray, bbox: list[float], size: int = 112) 
         return ""
     crop = cv2.resize(crop, (size, size))
     _, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    b64 = base64.b64encode(buf).decode()
-    return f"data:image/jpeg;base64,{b64}"
+    return f"data:image/jpeg;base64,{base64.b64encode(buf).decode()}"
+
+
+def _save_padded_face_crop(
+    frame: np.ndarray, bbox, output_dir: str, filename: str
+) -> None:
+    """Save a high-quality face crop with generous padding around the bbox.
+
+    Used downstream by source_picker to compare against the picture library.
+    """
+    x1, y1, x2, y2 = [int(v) for v in bbox]
+    h, w = frame.shape[:2]
+    padding = max(x2 - x1, y2 - y1)  # pad by 1× the face size in each direction
+    crop = frame[
+        max(0, y1 - padding): min(h, y2 + padding),
+        max(0, x1 - padding): min(w, x2 + padding),
+    ]
+    if crop.size > 0:
+        cv2.imwrite(
+            os.path.join(output_dir, filename), crop, [cv2.IMWRITE_JPEG_QUALITY, 95]
+        )
+
+
+def _majority_gender(genders: list) -> str:
+    """Return the most common gender label, normalised to 'male'/'female'."""
+    raw = Counter(genders).most_common(1)[0][0]
+    if isinstance(raw, (int, np.integer)):
+        return "male" if int(raw) == 1 else "female"
+    return str(raw)
+
+
+# ── Dummy mode (frontend development without InsightFace) ────────────────
 
 
 def _dummy_detect_and_cluster(
-        frames_dir: str, storage_dir: str, subsample: int = 5
+    frames_dir: str, storage_dir: str, subsample: int = 5
 ) -> dict:
-    """Return 3 random square bounding boxes as fake faces for frontend dev."""
-    frame_files = sorted(
-        f for f in os.listdir(frames_dir) if f.startswith("frame_") and f.endswith(".jpg")
-    )
+    """Generate 3 fake faces with random bounding boxes (deterministic seed)."""
+    frame_files = _list_frame_files(frames_dir)
     if not frame_files:
         return {"faces": {}}
 
-    # Read first frame to get dimensions
-    sample = cv2.imread(os.path.join(frames_dir, frame_files[0]))
-    if sample is None:
+    first_frame = cv2.imread(os.path.join(frames_dir, frame_files[0]))
+    if first_frame is None:
         return {"faces": {}}
-    h, w = sample.shape[:2]
+    frame_h, frame_w = first_frame.shape[:2]
 
-    rng = random.Random(42)  # deterministic so reloads are stable
-    face_size = min(h, w) // 5  # square side length
+    rng = random.Random(42)
+    face_size = min(frame_h, frame_w) // 5
+    num_sampled_frames = sum(1 for i in range(len(frame_files)) if i % subsample == 0)
 
-    faces_data = {}
+    faces = {}
     for idx in range(3):
         face_id = f"face_{idx}"
-        # Pick a random position that fits within the frame
-        x1 = rng.randint(0, max(0, w - face_size))
-        y1 = rng.randint(0, max(0, h - face_size))
-        x2 = x1 + face_size
-        y2 = y1 + face_size
-        bbox = [float(x1), float(y1), float(x2), float(y2)]
+        x1 = rng.randint(0, max(0, frame_w - face_size))
+        y1 = rng.randint(0, max(0, frame_h - face_size))
+        bbox = [float(x1), float(y1), float(x1 + face_size), float(y1 + face_size)]
 
-        thumbnail = _crop_face_thumbnail(sample, bbox)
-        thumb_path = f"{face_id}_thumb.jpg"
+        thumb_filename = f"{face_id}_thumb.jpg"
+        crop_filename = f"{face_id}_crop.jpg"
 
-        crop = sample[y1:y2, x1:x2]
+        crop = first_frame[y1:y1 + face_size, x1:x1 + face_size]
         if crop.size > 0:
-            cv2.imwrite(os.path.join(storage_dir, thumb_path), crop)
+            cv2.imwrite(os.path.join(storage_dir, thumb_filename), crop)
+        _save_padded_face_crop(first_frame, bbox, storage_dir, crop_filename)
 
-        # Use first library image as source (dummy mode has no embeddings)
-        library_images = _get_library_images()
-        source_path = library_images[0] if library_images else f"{face_id}_source.jpg"
-        if not library_images:
-            raise Exception("no source images provided")
-
-        sampled_count = sum(1 for i in range(len(frame_files)) if i % subsample == 0)
-        faces_data[face_id] = {
+        faces[face_id] = {
             "age": rng.randint(20, 45),
             "gender": rng.choice(["male", "female"]),
-            "thumbnail": thumbnail,
-            "thumbnail_path": thumb_path,
-            "source_path": source_path,
-            "frame_count": sampled_count,
+            "thumbnail": _make_base64_thumbnail(first_frame, bbox),
+            "thumbnail_path": thumb_filename,
+            "crop_path": crop_filename,
+            "frame_count": num_sampled_frames,
         }
 
-    return {"faces": faces_data}
+    return {"faces": faces}
+
+
+# ── Real detection ───────────────────────────────────────────────────────
 
 
 def detect_and_cluster(
-        frames_dir: str, storage_dir: str, subsample: int = 5
+    frames_dir: str, storage_dir: str, subsample: int = 5
 ) -> dict:
+    """Detect faces across sub-sampled frames, cluster by identity.
+
+    Returns {"faces": {"face_0": {...}, "face_1": {...}, ...}}.
+    """
     if DUMMY_TRACKING:
         return _dummy_detect_and_cluster(frames_dir, storage_dir, subsample)
 
-    app = _get_app()
-    frame_files = sorted(
-        f for f in os.listdir(frames_dir) if f.startswith("frame_") and f.endswith(".jpg")
-    )
+    analyser = _get_face_analyser()
+    frame_files = _list_frame_files(frames_dir)
 
-    detections: list[tuple[int, object]] = []
-    frame_cache: dict[int, np.ndarray] = {}
+    # ── 1. Detect every face on every sub-sampled frame ──────────────────
+    all_detections: list[tuple[int, object]] = []  # (frame_index, insightface_object)
+    frame_by_index: dict[int, np.ndarray] = {}
 
-    for i, fname in enumerate(frame_files):
-        if i % subsample != 0:
+    for frame_index, filename in enumerate(frame_files):
+        if frame_index % subsample != 0:
             continue
-        frame_path = os.path.join(frames_dir, fname)
-        frame = cv2.imread(frame_path)
+        frame = cv2.imread(os.path.join(frames_dir, filename))
         if frame is None:
             continue
-        frame_cache[i] = frame
-        faces = app.get(frame)
-        for face in faces:
-            detections.append((i, face))
+        frame_by_index[frame_index] = frame
+        for face in analyser.get(frame):
+            all_detections.append((frame_index, face))
 
-    if not detections:
+    if not all_detections:
         return {"faces": {}}
 
-    clusters: list[list[tuple[int, object]]] = []
-    similarity_threshold = 0.4
+    # ── 2. Cluster detections by identity (greedy cosine matching) ───────
+    identity_clusters: list[list[tuple[int, object]]] = []
 
-    for frame_idx, face in detections:
-        emb = face.normed_embedding
-        matched = False
-        for cluster in clusters:
-            rep_emb = cluster[0][1].normed_embedding
-            if _cosine_similarity(emb, rep_emb) >= similarity_threshold:
-                cluster.append((frame_idx, face))
-                matched = True
+    for frame_index, face in all_detections:
+        embedding = face.normed_embedding
+        placed = False
+        for cluster in identity_clusters:
+            representative_embedding = cluster[0][1].normed_embedding
+            if _cosine_similarity(embedding, representative_embedding) >= SIMILARITY_THRESHOLD:
+                cluster.append((frame_index, face))
+                placed = True
                 break
-        if not matched:
-            clusters.append([(frame_idx, face)])
+        if not placed:
+            identity_clusters.append([(frame_index, face)])
 
-    faces_data = {}
-    for cluster_idx, cluster in enumerate(clusters):
-        face_id = f"face_{cluster_idx}"
-        ages = [f.age for _, f in cluster]
-        genders = [f.gender for _, f in cluster]
+    # ── 3. Build output dict per identity ────────────────────────────────
+    faces_output = {}
 
-        best_idx, best_face = max(
+    for cluster_index, cluster in enumerate(identity_clusters):
+        face_id = f"face_{cluster_index}"
+
+        # Pick the detection with the largest bounding-box area (best quality)
+        best_frame_index, best_detection = max(
             cluster,
-            key=lambda x: (x[1].bbox[2] - x[1].bbox[0]) * (x[1].bbox[3] - x[1].bbox[1])
+            key=lambda det: (det[1].bbox[2] - det[1].bbox[0]) * (det[1].bbox[3] - det[1].bbox[1]),
         )
-        best_frame = frame_cache.get(best_idx)
-        thumbnail = ""
-        thumb_path = f"{face_id}_thumb.jpg"
+        best_frame = frame_by_index.get(best_frame_index)
+
+        thumb_filename = f"{face_id}_thumb.jpg"
+        crop_filename = f"{face_id}_crop.jpg"
+        thumbnail_b64 = ""
+
         if best_frame is not None:
-            thumbnail = _crop_face_thumbnail(best_frame, best_face.bbox.tolist())
-            x1, y1, x2, y2 = [int(v) for v in best_face.bbox]
-            h, w = best_frame.shape[:2]
-            crop = best_frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
-            if crop.size > 0:
-                cv2.imwrite(os.path.join(storage_dir, thumb_path), crop)
+            bbox = best_detection.bbox.tolist()
+            thumbnail_b64 = _make_base64_thumbnail(best_frame, bbox)
 
-        # Pick source from picture library (closest face match)
-        face_embedding = cluster[0][1].normed_embedding
-        library_match = find_closest_library_face(face_embedding)
-        if library_match:
-            source_path = library_match
-        else:
-            raise Exception
+            # Save small thumbnail (tight crop)
+            bx1, by1, bx2, by2 = [int(v) for v in bbox]
+            fh, fw = best_frame.shape[:2]
+            tight_crop = best_frame[max(0, by1):min(fh, by2), max(0, bx1):min(fw, bx2)]
+            if tight_crop.size > 0:
+                cv2.imwrite(os.path.join(storage_dir, thumb_filename), tight_crop)
 
-        avg_age = int(np.mean(ages))
-        gender_counts = defaultdict(int)
-        for g in genders:
-            gender_counts[g] += 1
-        raw_gender = max(gender_counts, key=gender_counts.get)
-        # InsightFace returns gender as int (0=female, 1=male) or str
-        if isinstance(raw_gender, (int, np.integer)):
-            majority_gender = "male" if int(raw_gender) == 1 else "female"
-        else:
-            majority_gender = str(raw_gender)
+            # Save padded crop (for source_picker matching)
+            _save_padded_face_crop(best_frame, bbox, storage_dir, crop_filename)
 
-        faces_data[face_id] = {
-            "age": avg_age,
-            "gender": majority_gender,
-            "thumbnail": thumbnail,
-            "thumbnail_path": thumb_path,
-            "source_path": source_path,
+        faces_output[face_id] = {
+            "age": int(np.mean([det.age for _, det in cluster])),
+            "gender": _majority_gender([det.gender for _, det in cluster]),
+            "thumbnail": thumbnail_b64,
+            "thumbnail_path": thumb_filename,
+            "crop_path": crop_filename,
             "frame_count": len(cluster),
         }
 
-    return {"faces": faces_data}
+    return {"faces": faces_output}
 
 
-def extract_face_clips(
-        frames_dir: str,
-        faces_json: dict,
-        selected_face_ids: list[str],
-        output_base_dir: str,
-) -> dict[str, dict]:
-    """Extract per-face cropped frame sequences from full frames.
-
-    For each selected face:
-    1. Re-detect the face on every frame using embedding matching
-    2. Crop a padded square region around the face
-    3. Save cropped frames to {output_base_dir}/{face_id}/frame_XXXX.jpg
-
-    Returns a manifest dict:
-    {
-        "face_0": {
-            "clip_dir": "/path/to/face_0/",
-            "crops": {
-                "frame_0001.jpg": (x1, y1, x2, y2),
-            },
-            "crop_size": (width, height),
-        }
-    }
-    """
-    app = _get_app()
-    frame_files = sorted(
-        f for f in os.listdir(frames_dir)
-        if f.startswith("frame_") and f.endswith(".jpg")
-    )
-    manifests = {}
-
-    for face_id in selected_face_ids:
-        face_data = faces_json["faces"][face_id]
-        target_embedding = np.array(face_data["embedding"])
-
-        clip_dir = os.path.join(output_base_dir, face_id)
-        os.makedirs(clip_dir, exist_ok=True)
-
-        # Single pass: detect face on every frame, cache frame + bbox
-        per_frame_data = {}  # fname -> (frame, bbox)
-        for fname in frame_files:
-            frame = cv2.imread(os.path.join(frames_dir, fname))
-            if frame is None:
-                continue
-            detected = app.get(frame)
-            for face in detected:
-                sim = _cosine_similarity(face.normed_embedding, target_embedding)
-                if sim >= 0.4:
-                    per_frame_data[fname] = (frame, face.bbox.tolist())
-                    break
-
-        if not per_frame_data:
-            continue
-
-        # Compute consistent crop size from the largest face across all frames
-        all_bboxes = [bbox for _, bbox in per_frame_data.values()]
-        max_face_size = max(
-            max(b[2] - b[0], b[3] - b[1]) for b in all_bboxes
-        )
-        crop_size = int(max_face_size * 1.5)
-
-        # Crop each frame at a square region centered on the face
-        crops_manifest = {}
-        for fname, (frame, bbox) in per_frame_data.items():
-            h, w = frame.shape[:2]
-
-            cx = (bbox[0] + bbox[2]) / 2
-            cy = (bbox[1] + bbox[3]) / 2
-            half = crop_size / 2
-
-            x1 = int(max(0, cx - half))
-            y1 = int(max(0, cy - half))
-            x2 = int(min(w, x1 + crop_size))
-            y2 = int(min(h, y1 + crop_size))
-            # Adjust start if crop was clamped at the end
-            x1 = int(max(0, x2 - crop_size))
-            y1 = int(max(0, y2 - crop_size))
-
-            crop = frame[y1:y2, x1:x2]
-            cv2.imwrite(os.path.join(clip_dir, fname), crop)
-            crops_manifest[fname] = (x1, y1, x2, y2)
-
-        actual_h = y2 - y1
-        actual_w = x2 - x1
-
-        manifests[face_id] = {
-            "clip_dir": clip_dir,
-            "crops": crops_manifest,
-            "crop_size": (actual_w, actual_h),
-        }
-
-    return manifests
+# ── JSON persistence ─────────────────────────────────────────────────────
 
 
 def save_faces_json(faces_data: dict, video_info: dict, output_path: str) -> None:
-    data = {
-        "fps": video_info["fps"],
-        "total_frames": video_info["total_frames"],
-        "faces": faces_data["faces"],
-    }
     with open(output_path, "w") as f:
-        json.dump(data, f, indent=2)
+        json.dump(
+            {"fps": video_info["fps"], "total_frames": video_info["total_frames"],
+             "faces": faces_data["faces"]},
+            f, indent=2,
+        )
 
 
 def load_faces_json(path: str) -> dict:

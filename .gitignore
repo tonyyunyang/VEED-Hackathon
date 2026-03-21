@@ -26,6 +26,7 @@ server/.env
 server/venv
 server/storage
 server/test_swap_output
+server/picture_example/*
 
 *.af
 # Temporary Scratch Files
