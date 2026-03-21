@@ -1,7 +1,7 @@
 [project]
 name = "veed-face-swap"
 version = "0.1.0"
-description = "Video face swap tool using InsightFace"
+description = "Video face swap backend — delegates swapping to FaceFusion API"
 requires-python = ">=3.11"
 
 dependencies = [
@@ -15,7 +15,6 @@ dependencies = [
     "opencv-python>=4.9.0",
     "numpy>=1.26.0",
     "python-multipart>=0.0.9",
-    "fal-client>=0.5.0",
 ]
 
 [dependency-groups]

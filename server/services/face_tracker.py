@@ -23,10 +23,6 @@ def _get_app():
     return _app
 
 
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
-
-
 def _crop_face_thumbnail(frame: np.ndarray, bbox: list[float], size: int = 112) -> str:
     x1, y1, x2, y2 = [int(v) for v in bbox]
     h, w = frame.shape[:2]
@@ -42,7 +38,7 @@ def _crop_face_thumbnail(frame: np.ndarray, bbox: list[float], size: int = 112) 
 
 
 def _dummy_detect_and_cluster(
-    frames_dir: str, storage_dir: str, subsample: int = 5
+        frames_dir: str, storage_dir: str, subsample: int = 5
 ) -> dict:
     """Return 3 random square bounding boxes as fake faces for frontend dev."""
     frame_files = sorted(
@@ -70,35 +66,34 @@ def _dummy_detect_and_cluster(
         y2 = y1 + face_size
         bbox = [float(x1), float(y1), float(x2), float(y2)]
 
-        # Build frames dict — assign this box to every subsampled frame
-        frames_dict = {}
-        for i, fname in enumerate(frame_files):
-            if i % subsample != 0:
-                continue
-            frames_dict[str(i)] = bbox
-
-        # Thumbnail from the first frame
         thumbnail = _crop_face_thumbnail(sample, bbox)
         thumb_path = f"{face_id}_thumb.jpg"
+
         crop = sample[y1:y2, x1:x2]
         if crop.size > 0:
             cv2.imwrite(os.path.join(storage_dir, thumb_path), crop)
 
+        # Use first library image as source (dummy mode has no embeddings)
+        library_images = _get_library_images()
+        source_path = library_images[0] if library_images else f"{face_id}_source.jpg"
+        if not library_images:
+            raise Exception("no source images provided")
+
+        sampled_count = sum(1 for i in range(len(frame_files)) if i % subsample == 0)
         faces_data[face_id] = {
             "age": rng.randint(20, 45),
             "gender": rng.choice(["male", "female"]),
             "thumbnail": thumbnail,
             "thumbnail_path": thumb_path,
-            "embedding": [0.0] * 512,
-            "frames": frames_dict,
-            "frame_count": len(frames_dict),
+            "source_path": source_path,
+            "frame_count": sampled_count,
         }
 
     return {"faces": faces_data}
 
 
 def detect_and_cluster(
-    frames_dir: str, storage_dir: str, subsample: int = 5
+        frames_dir: str, storage_dir: str, subsample: int = 5
 ) -> dict:
     if DUMMY_TRACKING:
         return _dummy_detect_and_cluster(frames_dir, storage_dir, subsample)
@@ -153,20 +148,22 @@ def detect_and_cluster(
         )
         best_frame = frame_cache.get(best_idx)
         thumbnail = ""
-        if best_frame is not None:
-            thumbnail = _crop_face_thumbnail(best_frame, best_face.bbox.tolist())
-
         thumb_path = f"{face_id}_thumb.jpg"
         if best_frame is not None:
+            thumbnail = _crop_face_thumbnail(best_frame, best_face.bbox.tolist())
             x1, y1, x2, y2 = [int(v) for v in best_face.bbox]
             h, w = best_frame.shape[:2]
             crop = best_frame[max(0, y1):min(h, y2), max(0, x1):min(w, x2)]
             if crop.size > 0:
                 cv2.imwrite(os.path.join(storage_dir, thumb_path), crop)
 
-        frames_dict = {}
-        for frame_idx, face in cluster:
-            frames_dict[str(frame_idx)] = face.bbox.tolist()
+        # Pick source from picture library (closest face match)
+        face_embedding = cluster[0][1].normed_embedding
+        library_match = find_closest_library_face(face_embedding)
+        if library_match:
+            source_path = library_match
+        else:
+            raise Exception
 
         avg_age = int(np.mean(ages))
         gender_counts = defaultdict(int)
@@ -184,19 +181,18 @@ def detect_and_cluster(
             "gender": majority_gender,
             "thumbnail": thumbnail,
             "thumbnail_path": thumb_path,
-            "embedding": cluster[0][1].normed_embedding.tolist(),
-            "frames": frames_dict,
-            "frame_count": len(frames_dict),
+            "source_path": source_path,
+            "frame_count": len(cluster),
         }
 
     return {"faces": faces_data}
 
 
 def extract_face_clips(
-    frames_dir: str,
-    faces_json: dict,
-    selected_face_ids: list[str],
-    output_base_dir: str,
+        frames_dir: str,
+        faces_json: dict,
+        selected_face_ids: list[str],
+        output_base_dir: str,
 ) -> dict[str, dict]:
     """Extract per-face cropped frame sequences from full frames.
 

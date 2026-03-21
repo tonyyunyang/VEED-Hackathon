@@ -30,25 +30,3 @@ def extract_frames(video_path: str, output_dir: str) -> dict:
     ]
     subprocess.run(cmd, capture_output=True, check=True)
     return info
-
-
-def extract_audio(video_path: str, output_path: str) -> bool:
-    cmd = [
-        "ffmpeg", "-i", video_path, "-vn", "-acodec", "aac",
-        "-b:a", "128k", output_path, "-y"
-    ]
-    result = subprocess.run(cmd, capture_output=True)
-    return result.returncode == 0
-
-
-def reassemble_video(
-    frames_dir: str, audio_path: str | None, output_path: str, fps: float
-) -> None:
-    cmd = [
-        "ffmpeg", "-framerate", str(fps),
-        "-i", os.path.join(frames_dir, "frame_%04d.jpg"),
-    ]
-    if audio_path and os.path.exists(audio_path):
-        cmd.extend(["-i", audio_path, "-c:a", "aac", "-shortest"])
-    cmd.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p", output_path, "-y"])
-    subprocess.run(cmd, capture_output=True, check=True)

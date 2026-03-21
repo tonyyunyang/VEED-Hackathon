@@ -8,9 +8,6 @@ from fastapi.testclient import TestClient
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 
-# Set up storage dir before importing app
-os.environ.setdefault("ENABLE_LIPSYNC", "false")
-
 from main import app
 from config import STORAGE_DIR
 
