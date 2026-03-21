@@ -1,0 +1,50 @@
+{
+  "video_metadata": {
+    "fps": 25,
+    "width": 1280,
+    "height": 720,
+    "total_frames": 3000
+  },
+  "frames": {
+    "0": [
+      {
+        "bbox": [100.0, 100.0, 200.0, 220.0],
+        "id": 1,
+        "label": "Person A",
+        "det_score": 0.98
+      },
+      {
+        "bbox": [600.0, 200.0, 710.0, 330.0],
+        "id": 2,
+        "label": "Person B",
+        "det_score": 0.98
+      },
+      {
+        "bbox": [300.0, 400.0, 395.0, 515.0],
+        "id": 3,
+        "label": "Person C",
+        "det_score": 0.98
+      }
+    ],
+    "1": [
+      {
+        "bbox": [100.1, 100.05, 200.1, 220.05],
+        "id": 1,
+        "label": "Person A",
+        "det_score": 0.98
+      },
+      {
+        "bbox": [599.9, 200.1, 709.9, 330.1],
+        "id": 2,
+        "label": "Person B",
+        "det_score": 0.98
+      },
+      {
+        "bbox": [300.2, 399.95, 395.2, 514.95],
+        "id": 3,
+        "label": "Person C",
+        "det_score": 0.98
+      }
+    ]
+  }
+}
