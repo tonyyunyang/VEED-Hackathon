@@ -14,10 +14,10 @@ import os
 import cv2
 import numpy as np
 
-from config import PICTURE_LIBRARY_DIR, DUMMY_TRACKING
+from VEEDHackathon.server.config import PICTURE_LIBRARY_DIR, DUMMY_TRACKING
+from sklearn.metrics.pairwise import cosine_similarity
 
-if not DUMMY_TRACKING:
-    from insightface.app import FaceAnalysis
+from insightface.app import FaceAnalysis
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
@@ -36,10 +36,6 @@ def _get_face_analyser():
         _face_analyser = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
         _face_analyser.prepare(ctx_id=0, det_size=(640, 640))
     return _face_analyser
-
-
-def _cosine_similarity(a: np.ndarray, b: np.ndarray) -> float:
-    return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b) + 1e-8))
 
 
 # ── Library helpers ──────────────────────────────────────────────────────
@@ -130,7 +126,10 @@ def pick_source(face_crop_path: str) -> str:
         best_match_path = first_image
         best_similarity = -1.0
         for library_path, library_embedding in library:
-            similarity = _cosine_similarity(video_face_embedding, library_embedding)
+            similarity = cosine_similarity(
+                video_face_embedding.reshape(1, -1),
+                library_embedding.reshape(1, -1),
+            )[0, 0]
             if similarity > best_similarity:
                 best_similarity = similarity
                 best_match_path = library_path
@@ -139,3 +138,54 @@ def pick_source(face_crop_path: str) -> str:
 
     except Exception:
         return first_image
+
+
+if __name__ == "__main__":
+    images = _list_library_images()
+    if not images:
+        print("No images found in picture library")
+        raise SystemExit(1)
+
+    test_image = images[0]
+    print(f"Test image: {os.path.basename(test_image)}")
+    print(f"Library: {len(images)} images\n")
+
+    # Extract test image embedding
+    test_embedding = _extract_embedding(test_image)
+    if test_embedding is None:
+        print("No face detected in test image")
+        raise SystemExit(1)
+
+    # Test 1: compare against full library (should find itself)
+    print("── Test 1: Full library (should match itself) ──")
+    library = _build_library_embeddings()
+    ranked = []
+    for path, emb in library:
+        sim = cosine_similarity(
+            test_embedding.reshape(1, -1), emb.reshape(1, -1)
+        )[0, 0]
+        ranked.append((sim, path))
+    ranked.sort(reverse=True)
+
+    for i, (sim, path) in enumerate(ranked):
+        tag = " ← TEST IMAGE" if path == test_image else ""
+        print(f"  {i + 1}. {os.path.basename(path):>20s}  sim={sim:.4f}{tag}")
+
+    assert ranked[0][1] == test_image, "FAIL: did not match itself as #1"
+    print("  ✓ Correctly matched itself\n")
+
+    # Test 2: compare against library minus the test image
+    print("── Test 2: Library without test image (closest match) ──")
+    filtered = [(path, emb) for path, emb in library if path != test_image]
+    ranked2 = []
+    for path, emb in filtered:
+        sim = cosine_similarity(
+            test_embedding.reshape(1, -1), emb.reshape(1, -1)
+        )[0, 0]
+        ranked2.append((sim, path))
+    ranked2.sort(reverse=True)
+
+    for i, (sim, path) in enumerate(ranked2):
+        print(f"  {i + 1}. {os.path.basename(path):>20s}  sim={sim:.4f}")
+
+    print(f"\n  Best match (excluding self): {os.path.basename(ranked2[0][1])} (sim={ranked2[0][0]:.4f})")
