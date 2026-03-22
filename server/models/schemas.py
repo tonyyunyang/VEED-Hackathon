@@ -70,6 +70,7 @@ class StatusResponse(BaseModel):
     status: str
     progress: float
     error: str | None = None
+    warnings: list[str] | None = None
     phase: str | None = None
     message: str | None = None
     completed_frames: int | None = None

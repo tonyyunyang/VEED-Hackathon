@@ -358,6 +358,9 @@ async def _run_swap_job(
                 update_status,
                 frame_names,
             )
+            reference_warnings = engine.get_warnings()
+            if reference_warnings:
+                _update_job(job_id, warnings=reference_warnings)
 
             _update_job(
                 job_id,
@@ -494,6 +497,7 @@ async def swap_faces(req: SwapRequest):
         "status": "processing",
         "progress": 0.0,
         "error": None,
+        "warnings": None,
         "video_id": media_id,
         "media_id": media_id,
         "media_type": media_type,
@@ -527,6 +531,7 @@ async def get_status(job_id: str):
         status=job["status"],
         progress=job["progress"],
         error=job.get("error"),
+        warnings=job.get("warnings"),
         phase=job.get("phase"),
         message=job.get("message"),
         completed_frames=job.get("completed_frames"),

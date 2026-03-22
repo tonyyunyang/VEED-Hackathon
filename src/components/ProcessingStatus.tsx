@@ -19,6 +19,7 @@ export function ProcessingStatus({
     status: "processing",
     progress: 0,
     error: null,
+    warnings: null,
   });
 
   useEffect(() => {
@@ -26,6 +27,7 @@ export function ProcessingStatus({
       status: "processing",
       progress: 0,
       error: null,
+      warnings: null,
     });
   }, [jobId]);
 
@@ -74,6 +76,17 @@ export function ProcessingStatus({
           mediaType={status.media_type}
           alt={`Generated ${mediaLabel.toLowerCase()} preview`}
         />
+        {status.warnings && status.warnings.length > 0 && (
+          <div className="w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900">
+            <div className="mb-1 flex items-center gap-2 font-medium">
+              <AlertCircle className="h-4 w-4 text-amber-700" />
+              Reference generation warning
+            </div>
+            {status.warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+          </div>
+        )}
         <div className="flex gap-3">
           <a
             href={downloadUrl}
@@ -123,6 +136,17 @@ export function ProcessingStatus({
           {status.message ?? "Working through the selected media"}
         </p>
       </div>
+      {status.warnings && status.warnings.length > 0 && (
+        <div className="w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900">
+          <div className="mb-1 flex items-center gap-2 font-medium">
+            <AlertCircle className="h-4 w-4 text-amber-700" />
+            Reference generation warning
+          </div>
+          {status.warnings.map((warning) => (
+            <p key={warning}>{warning}</p>
+          ))}
+        </div>
+      )}
       <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
         <div
           className="h-full bg-primary rounded-full transition-all duration-500"

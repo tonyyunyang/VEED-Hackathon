@@ -88,10 +88,16 @@ def test_swap_response():
 
 
 def test_status_response_processing():
-    r = StatusResponse(status="processing", progress=0.5, media_type="video")
+    r = StatusResponse(
+        status="processing",
+        progress=0.5,
+        media_type="video",
+        warnings=["Runware fallback in use"],
+    )
     assert r.error is None
     assert r.progress == 0.5
     assert r.media_type == "video"
+    assert r.warnings == ["Runware fallback in use"]
 
 
 def test_status_response_failed():
@@ -99,6 +105,7 @@ def test_status_response_failed():
         status="failed",
         progress=0.0,
         error="Something broke",
+        warnings=None,
         output_filename="swapped.png",
     )
     assert r.error == "Something broke"

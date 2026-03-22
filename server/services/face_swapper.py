@@ -10,6 +10,7 @@ import subprocess
 import threading
 import uuid
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -84,22 +85,29 @@ def _build_runware_prompt(age: int, gender: str, style_prompt: str = "") -> str:
     return base
 
 
+@dataclass(frozen=True)
+class ReferenceResolution:
+    path: str | None
+    source_label: str | None = None
+
+
 def _generate_face_runware(
     thumbnail_path: str,
     output_path: str,
     age: int,
     gender: str,
     style_prompt: str = "",
-) -> str | None:
+) -> tuple[str | None, str | None]:
     """Generate a neutral replacement face via Runware img2img.
 
     Uses the detected face thumbnail as seed image and steers the generation
     toward a neutral, demographically-consistent face.  Calls the Runware
-    WebSocket API directly (no SDK needed).  Returns the path to the
-    generated image on success, or ``None`` on failure.
+    WebSocket API directly (no SDK needed). Returns ``(path, error)``
+    where ``path`` is the generated image on success and ``error``
+    is a human-readable failure reason on fallback.
     """
     if not RUNWARE_API_KEY:
-        return None
+        return None, "Runware API key is not configured on the server"
 
     try:
         import json
@@ -127,12 +135,12 @@ def _generate_face_runware(
             auth_resp = json.loads(conn.recv(timeout=15))
             if isinstance(auth_resp, dict) and auth_resp.get("error"):
                 logger.warning("Runware auth failed: %s", auth_resp)
-                return None
+                return None, str(auth_resp.get("error"))
             if isinstance(auth_resp, list):
                 for item in auth_resp:
                     if isinstance(item, dict) and item.get("error"):
                         logger.warning("Runware auth failed: %s", item)
-                        return None
+                        return None, str(item.get("error"))
 
             # Send image inference request
             conn.send(json.dumps([{
@@ -164,13 +172,13 @@ def _generate_face_runware(
                         break
                     if item.get("taskUUID") == task_uuid and item.get("error"):
                         logger.warning("Runware task error: %s", item)
-                        return None
+                        return None, str(item.get("error"))
                 if image_url:
                     break
 
         if not image_url:
             logger.warning("Runware: no image URL received")
-            return None
+            return None, "Runware returned no generated image URL"
 
         # Download the generated image
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -181,11 +189,11 @@ def _generate_face_runware(
                 out.write(resp.content)
 
         logger.info("Runware generated face saved to %s", output_path)
-        return output_path
+        return output_path, None
 
-    except Exception:
+    except Exception as exc:
         logger.warning("Runware face generation failed, falling back", exc_info=True)
-        return None
+        return None, str(exc)
 
 
 def _get_app() -> FaceAnalysis:
@@ -317,6 +325,42 @@ class ReferenceFaceResolver:
         self.reference_faces_dir = reference_faces_dir
         self.allow_target_thumbnail_fallback = allow_target_thumbnail_fallback
         self.style_prompt = style_prompt
+        self._warnings: list[str] = []
+
+    def get_warnings(self) -> list[str]:
+        return list(self._warnings)
+
+    def _record_warning(self, message: str) -> None:
+        if message and message not in self._warnings:
+            self._warnings.append(message)
+
+    def _resolve_fallback(self, video_dir: str, face_id: str, face_data: dict) -> ReferenceResolution:
+        direct_path = Path(self.reference_image) if self.reference_image else None
+        if direct_path and direct_path.is_file():
+            return ReferenceResolution(
+                path=str(direct_path),
+                source_label="the configured server reference image",
+            )
+
+        age = int(face_data.get("age") or 0)
+        gender = str(face_data.get("gender") or "").strip().lower()
+        candidates = self._candidates_for_face(face_id, gender, age)
+        if candidates:
+            return ReferenceResolution(
+                path=str(candidates),
+                source_label="the local reference face library",
+            )
+
+        thumbnail_name = face_data.get("thumbnail_path")
+        if self.allow_target_thumbnail_fallback and thumbnail_name:
+            thumbnail_path = Path(video_dir) / thumbnail_name
+            if thumbnail_path.is_file():
+                return ReferenceResolution(
+                    path=str(thumbnail_path),
+                    source_label="the detected face thumbnail",
+                )
+
+        return ReferenceResolution(path=None, source_label=None)
 
     def resolve(self, video_dir: str, face_id: str, face_data: dict) -> str | None:
         # 1. User-uploaded reference image for this video (highest priority)
@@ -326,40 +370,48 @@ class ReferenceFaceResolver:
         if uploaded_candidates:
             return str(Path(video_dir) / uploaded_candidates[0])
 
-        # 2. Global reference image from env
-        direct_path = Path(self.reference_image) if self.reference_image else None
-        if direct_path and direct_path.is_file():
-            return str(direct_path)
+        fallback_resolution = self._resolve_fallback(video_dir, face_id, face_data)
+        sanitized_style_prompt = _sanitize_style_prompt(self.style_prompt)
 
-        age = int(face_data.get("age") or 0)
-        gender = str(face_data.get("gender") or "").strip().lower()
-
-        # 3. Runware AI face generation (img2img from the detected thumbnail)
+        # 2. Runware AI face generation (img2img from the detected thumbnail) when requested
         thumbnail_name = face_data.get("thumbnail_path")
-        if RUNWARE_API_KEY and thumbnail_name:
+        if sanitized_style_prompt:
+            if not thumbnail_name:
+                if fallback_resolution.path:
+                    self._record_warning(
+                        "Runware reference generation was skipped because no detected face thumbnail "
+                        f"was available. Falling back to {fallback_resolution.source_label}."
+                    )
+                return fallback_resolution.path
+
             thumbnail_path = Path(video_dir) / thumbnail_name
-            if thumbnail_path.is_file():
-                output_path = str(
-                    Path(video_dir) / f".runware_generated_{face_id}.jpg"
-                )
-                generated = _generate_face_runware(
-                    str(thumbnail_path), output_path, age, gender,
-                    self.style_prompt,
-                )
-                if generated:
-                    return generated
+            if not thumbnail_path.is_file():
+                if fallback_resolution.path:
+                    self._record_warning(
+                        "Runware reference generation was skipped because the detected face thumbnail "
+                        f"could not be found. Falling back to {fallback_resolution.source_label}."
+                    )
+                return fallback_resolution.path
 
-        # 4. Fallback: pick from local reference library
-        candidates = self._candidates_for_face(face_id, gender, age)
-        if candidates:
-            return str(candidates)
+            generated, runware_error = _generate_face_runware(
+                str(thumbnail_path),
+                str(Path(video_dir) / f".runware_generated_{face_id}.jpg"),
+                int(face_data.get("age") or 0),
+                str(face_data.get("gender") or "").strip().lower(),
+                sanitized_style_prompt,
+            )
+            if generated:
+                return generated
 
-        if self.allow_target_thumbnail_fallback:
-            if thumbnail_name:
-                thumbnail_path = Path(video_dir) / thumbnail_name
-                if thumbnail_path.is_file():
-                    return str(thumbnail_path)
-        return None
+            if runware_error and fallback_resolution.path:
+                self._record_warning(
+                    f"Runware reference generation failed for {face_id}: {runware_error}. "
+                    f"Falling back to {fallback_resolution.source_label}."
+                )
+            return fallback_resolution.path
+
+        # 3. No requested generation, so use the configured fallback chain directly
+        return fallback_resolution.path
 
     def _candidates_for_face(self, face_id: str, gender: str, age: int) -> Path | None:
         root = Path(self.reference_faces_dir)
@@ -428,6 +480,9 @@ class InsightFaceSwapAdapter(FaceSwapAdapter):
 
 
 class FaceSwapEngine(ABC):
+    def get_warnings(self) -> list[str]:
+        return []
+
     @abstractmethod
     def swap_clip(
         self,
@@ -451,6 +506,9 @@ class InsightFaceSwapEngine(FaceSwapEngine):
     ):
         self.video_dir = video_dir
         self.reference_resolver = reference_resolver or ReferenceFaceResolver()
+
+    def get_warnings(self) -> list[str]:
+        return self.reference_resolver.get_warnings()
 
     def swap_clip(
         self,
@@ -495,6 +553,9 @@ class FaceFusionSwapEngine(FaceSwapEngine):
         self.facefusion_root = Path(FACEFUSION_DIR)
         self.facefusion_script = self.facefusion_root / "facefusion.py"
         self.bypass_content_analyser = FACEFUSION_BYPASS_CONTENT_ANALYSER
+
+    def get_warnings(self) -> list[str]:
+        return self.reference_resolver.get_warnings()
 
     def _build_swap_cmd(
         self,

@@ -1800,7 +1800,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   </span>
                 </div>
                 <p className="mb-3 text-[12px] leading-relaxed text-slate-500">
-                  Describe accessories or styles for the generated face. Only applies when no reference image is provided.
+                  Describe accessories or styles for a Runware-generated face. Only applies when no reference image is provided, and falls back if generation is unavailable.
                 </p>
                 <input
                   type="text"
@@ -1811,12 +1811,15 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-[13px] text-slate-800 placeholder:text-slate-400 transition-all focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-100"
                 />
                 <div className="mt-1.5 text-right text-[10px] text-slate-400">{stylePrompt.length}/200</div>
+                <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+                  Requires server-side Runware API configuration. If generation fails, the swap will continue with the configured fallback reference.
+                </p>
               </div>
 
               {/* Divider hint */}
               {!referenceFile && !stylePrompt && (
                 <p className="text-center text-[11px] text-slate-400">
-                  Leave both empty to auto-generate a neutral replacement face
+                  Leave both empty to use the configured fallback reference
                 </p>
               )}
             </div>

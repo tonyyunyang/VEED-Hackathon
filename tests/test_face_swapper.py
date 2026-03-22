@@ -54,6 +54,107 @@ def test_reference_face_resolver_falls_back_to_thumbnail(tmp_path):
     assert resolved == str(thumbnail_path)
 
 
+def test_reference_face_resolver_skips_runware_without_style_prompt(monkeypatch, tmp_path):
+    video_dir = tmp_path / "video"
+    video_dir.mkdir()
+    configured_reference = tmp_path / "configured.jpg"
+    configured_reference.write_bytes(b"configured")
+
+    def unexpected_runware(*args, **kwargs):
+        raise AssertionError("Runware should not be called when no style prompt was provided")
+
+    monkeypatch.setattr(face_swapper, "_generate_face_runware", unexpected_runware)
+
+    resolver = face_swapper.ReferenceFaceResolver(
+        reference_image=str(configured_reference),
+        reference_faces_dir=str(tmp_path / "missing"),
+        allow_target_thumbnail_fallback=False,
+        style_prompt="",
+    )
+
+    resolved = resolver.resolve(
+        str(video_dir),
+        "face_0",
+        {"thumbnail_path": "face_0_thumb.jpg", "gender": "female", "age": 31},
+    )
+
+    assert resolved == str(configured_reference)
+    assert resolver.get_warnings() == []
+
+
+def test_reference_face_resolver_prefers_runware_when_style_prompt_present(monkeypatch, tmp_path):
+    video_dir = tmp_path / "video"
+    video_dir.mkdir()
+    thumbnail_path = video_dir / "face_0_thumb.jpg"
+    thumbnail_path.write_bytes(b"thumb")
+    configured_reference = tmp_path / "configured.jpg"
+    configured_reference.write_bytes(b"configured")
+    generated_reference = video_dir / ".runware_generated_face_0.jpg"
+
+    monkeypatch.setattr(face_swapper, "RUNWARE_API_KEY", "test-key")
+
+    def fake_runware(thumbnail_path_arg, output_path_arg, age, gender, style_prompt):
+        assert thumbnail_path_arg == str(thumbnail_path)
+        assert output_path_arg == str(generated_reference)
+        assert age == 31
+        assert gender == "female"
+        assert style_prompt == "wearing sunglasses"
+        return str(generated_reference), None
+
+    monkeypatch.setattr(face_swapper, "_generate_face_runware", fake_runware)
+
+    resolver = face_swapper.ReferenceFaceResolver(
+        reference_image=str(configured_reference),
+        reference_faces_dir=str(tmp_path / "missing"),
+        allow_target_thumbnail_fallback=False,
+        style_prompt="wearing sunglasses",
+    )
+
+    resolved = resolver.resolve(
+        str(video_dir),
+        "face_0",
+        {"thumbnail_path": "face_0_thumb.jpg", "gender": "female", "age": 31},
+    )
+
+    assert resolved == str(generated_reference)
+    assert resolver.get_warnings() == []
+
+
+def test_reference_face_resolver_warns_and_falls_back_when_runware_fails(monkeypatch, tmp_path):
+    video_dir = tmp_path / "video"
+    video_dir.mkdir()
+    thumbnail_path = video_dir / "face_0_thumb.jpg"
+    thumbnail_path.write_bytes(b"thumb")
+    configured_reference = tmp_path / "configured.jpg"
+    configured_reference.write_bytes(b"configured")
+
+    monkeypatch.setattr(face_swapper, "RUNWARE_API_KEY", "test-key")
+    monkeypatch.setattr(
+        face_swapper,
+        "_generate_face_runware",
+        lambda *args, **kwargs: (None, "upstream timeout"),
+    )
+
+    resolver = face_swapper.ReferenceFaceResolver(
+        reference_image=str(configured_reference),
+        reference_faces_dir=str(tmp_path / "missing"),
+        allow_target_thumbnail_fallback=False,
+        style_prompt="with studio makeup",
+    )
+
+    resolved = resolver.resolve(
+        str(video_dir),
+        "face_0",
+        {"thumbnail_path": "face_0_thumb.jpg", "gender": "female", "age": 31},
+    )
+
+    assert resolved == str(configured_reference)
+    assert resolver.get_warnings() == [
+        "Runware reference generation failed for face_0: upstream timeout. "
+        "Falling back to the configured server reference image."
+    ]
+
+
 def test_copy_and_restore_sparse_clip_frames(tmp_path):
     clip_dir = tmp_path / "clip"
     sequence_dir = tmp_path / "sequence"

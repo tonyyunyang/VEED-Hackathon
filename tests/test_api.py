@@ -273,6 +273,7 @@ def test_status_response_includes_progress_metadata():
         "status": "processing",
         "progress": 0.42,
         "error": None,
+        "warnings": None,
         "video_id": "video123",
         "media_id": "video123",
         "media_type": "video",
@@ -290,6 +291,7 @@ def test_status_response_includes_progress_metadata():
         "status": "processing",
         "progress": 0.42,
         "error": None,
+        "warnings": None,
         "phase": "swapping",
         "message": "Swapping face_0 (1/2)",
         "completed_frames": 12,
@@ -298,6 +300,30 @@ def test_status_response_includes_progress_metadata():
         "media_type": "video",
         "output_filename": None,
     }
+
+
+def test_status_response_includes_reference_warnings():
+    main.jobs["job-warn"] = {
+        "status": "completed",
+        "progress": 1.0,
+        "error": None,
+        "warnings": ["Runware reference generation failed for face_0"],
+        "video_id": "image123",
+        "media_id": "image123",
+        "media_type": "image",
+        "phase": "completed",
+        "message": "Swap complete",
+        "completed_frames": 1,
+        "total_frames": 1,
+        "output_filename": "swapped.png",
+    }
+
+    response = client.get("/api/status/job-warn")
+
+    assert response.status_code == 200
+    assert response.json()["warnings"] == [
+        "Runware reference generation failed for face_0"
+    ]
 
 
 def test_download_completed_image(isolated_storage):
@@ -311,6 +337,7 @@ def test_download_completed_image(isolated_storage):
         "status": "completed",
         "progress": 1.0,
         "error": None,
+        "warnings": ["Runware reference generation failed for face_0"],
         "video_id": "img123",
         "media_id": "img123",
         "media_type": "image",
