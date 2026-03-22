@@ -1,8 +1,14 @@
+import logging
 import os
 import uuid
 import asyncio
 import shutil
 from pathlib import Path
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+)
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,6 +43,8 @@ from config import (
     FACE_ANALYSIS_DEVICE,
 )
 from services import video, face_tracker, face_swapper
+
+logger = logging.getLogger(__name__)
 
 
 def _configure_face_tracker_backend() -> None:
@@ -397,7 +405,18 @@ async def _run_swap_job(
 
 @app.post("/api/swap", response_model=SwapResponse)
 async def swap_faces(req: SwapRequest):
+    logger.info(
+        "POST /api/swap — video_id=%s, face_ids=%s, style_prompt=%r, frames=[%s:%s]",
+        req.video_id, req.face_ids, req.style_prompt, req.start_frame, req.end_frame,
+    )
     vdir = _video_dir(req.video_id)
+
+    # Check for uploaded reference image
+    uploaded_refs = [f for f in os.listdir(vdir) if f.startswith("uploaded_reference")]
+    if uploaded_refs:
+        logger.info("Found uploaded reference image: %s", uploaded_refs)
+    else:
+        logger.info("No uploaded reference image — will use Runware/library/fallback")
 
     faces_path = os.path.join(vdir, "faces.json")
     if not os.path.exists(faces_path):

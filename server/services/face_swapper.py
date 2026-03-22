@@ -99,6 +99,7 @@ def _generate_face_runware(
     generated image on success, or ``None`` on failure.
     """
     if not RUNWARE_API_KEY:
+        logger.info("Runware: skipping — RUNWARE_API_KEY not set")
         return None
 
     try:
@@ -110,7 +111,8 @@ def _generate_face_runware(
         RUNWARE_WS_URL = "wss://ws-api.runware.ai/v1"
 
         prompt = _build_runware_prompt(age, gender, style_prompt)
-        logger.info("Runware prompt: %s", prompt)
+        logger.info("Runware: generating face (age=%s, gender=%s, style=%r)", age, gender, style_prompt)
+        logger.info("Runware: prompt → %s", prompt)
 
         task_uuid = str(uuid.uuid4())
 
@@ -185,8 +187,10 @@ def _generate_face_runware(
                     break
 
         if not image_url:
-            logger.warning("Runware: no image URL received")
+            logger.warning("Runware: no image URL received after polling")
             return None
+
+        logger.info("Runware: received image URL → %s", image_url)
 
         # Download the generated image
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -196,7 +200,7 @@ def _generate_face_runware(
             with open(output_path, "wb") as out:
                 out.write(resp.content)
 
-        logger.info("Runware generated face saved to %s", output_path)
+        logger.info("Runware: generated face saved to %s (%d bytes)", output_path, len(resp.content))
         return output_path
 
     except Exception:
@@ -335,6 +339,10 @@ class ReferenceFaceResolver:
         self.style_prompt = style_prompt
 
     def resolve(self, video_dir: str, face_id: str, face_data: dict) -> str | None:
+        logger.info(
+            "[%s] Resolving reference face (age=%s, gender=%s, style=%r)",
+            face_id, face_data.get("age"), face_data.get("gender"), self.style_prompt,
+        )
         # 1. User-uploaded reference image for this video (highest priority)
         uploaded_candidates = sorted(
             name for name in os.listdir(video_dir) if name.startswith("uploaded_reference")
@@ -358,6 +366,7 @@ class ReferenceFaceResolver:
         if RUNWARE_API_KEY and thumbnail_name:
             thumbnail_path = Path(video_dir) / thumbnail_name
             if thumbnail_path.is_file():
+                logger.info("[%s] Attempting Runware AI generation (thumbnail: %s)", face_id, thumbnail_path)
                 output_path = str(
                     Path(video_dir) / f".runware_generated_{face_id}.jpg"
                 )
@@ -368,6 +377,11 @@ class ReferenceFaceResolver:
                 if generated:
                     logger.info("[%s] Reference source: Runware AI generated → %s", face_id, generated)
                     return generated
+                logger.warning("[%s] Runware generation failed, trying fallbacks", face_id)
+            else:
+                logger.warning("[%s] Runware: thumbnail not found at %s", face_id, thumbnail_path)
+        elif not RUNWARE_API_KEY:
+            logger.info("[%s] Runware: skipped (no API key)", face_id)
 
         # 4. Fallback: pick from local reference library
         candidates = self._candidates_for_face(face_id, gender, age)
