@@ -58,6 +58,19 @@ interface PersonMeta {
   frameCount?: number;
 }
 
+interface OverlayRegion {
+  area: number;
+  height: number;
+  hitHeight: number;
+  hitWidth: number;
+  hitX: number;
+  hitY: number;
+  id: PersonId;
+  width: number;
+  x: number;
+  y: number;
+}
+
 /**
  * Generates a set of colors with high contrast between them and at least 4.6:1 contrast against black.
  * Uses HSL distribution and relative luminance calculation to ensure accessibility.
@@ -151,9 +164,57 @@ const drawVideoFrame = (
   ctx.drawImage(video, layout.x, layout.y, layout.width, layout.height);
 };
 
-/**
- * Draws a person's bounding box and label.
- */
+const colorToRgba = (color: string, alpha: number) => {
+  const normalizedAlpha = Math.min(1, Math.max(0, alpha));
+
+  if (color.startsWith("rgb(")) {
+    return color.replace("rgb(", "rgba(").replace(")", `, ${normalizedAlpha})`);
+  }
+
+  if (color.startsWith("#")) {
+    let hex = color.slice(1);
+    if (hex.length === 3) {
+      hex = hex
+        .split("")
+        .map((char) => char + char)
+        .join("");
+    }
+
+    if (hex.length === 6) {
+      const value = Number.parseInt(hex, 16);
+      const r = (value >> 16) & 255;
+      const g = (value >> 8) & 255;
+      const b = value & 255;
+      return `rgba(${r}, ${g}, ${b}, ${normalizedAlpha})`;
+    }
+  }
+
+  return color;
+};
+
+const traceRoundedRect = (
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+) => {
+  const safeRadius = Math.max(0, Math.min(radius, width / 2, height / 2));
+
+  ctx.beginPath();
+  ctx.moveTo(x + safeRadius, y);
+  ctx.lineTo(x + width - safeRadius, y);
+  ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
+  ctx.lineTo(x + width, y + height - safeRadius);
+  ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  ctx.lineTo(x + safeRadius, y + height);
+  ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
+  ctx.lineTo(x, y + safeRadius);
+  ctx.quadraticCurveTo(x, y, x + safeRadius, y);
+  ctx.closePath();
+};
+
 const drawPersonOverlay = (
   ctx: CanvasRenderingContext2D,
   person: TrackingEntry,
@@ -161,25 +222,140 @@ const drawPersonOverlay = (
   scaleX: number,
   scaleY: number,
   color: string,
-) => {
+  options: {
+    canvasWidth: number;
+    isHovered: boolean;
+    isSelected: boolean;
+    isSelectionConstrained: boolean;
+  },
+): OverlayRegion => {
   const [x1, y1, x2, y2] = person.bbox;
   const bx = layout.x + x1 * scaleX;
   const by = layout.y + y1 * scaleY;
   const bw = (x2 - x1) * scaleX;
   const bh = (y2 - y1) * scaleY;
+  const radius = Math.max(10, Math.min(22, Math.min(bw, bh) * 0.16));
+  const isDimmed = options.isSelectionConstrained && !options.isSelected;
+  const strokeAlpha = options.isSelected ? 1 : options.isHovered ? 0.84 : 0.42;
+  const fillAlpha = options.isSelected ? 0.12 : options.isHovered ? 0.16 : 0.06;
+  const glowAlpha = options.isHovered ? 0.5 : options.isSelected ? 0.26 : 0;
+  const lineWidth = options.isHovered ? 4 : options.isSelected ? 3.25 : 2.5;
+  const hitPadding = Math.max(8, Math.min(18, Math.min(bw, bh) * 0.24));
 
-  ctx.strokeStyle = color;
-  ctx.lineWidth = 3;
-  ctx.strokeRect(bx, by, bw, bh);
+  ctx.save();
+  if (glowAlpha > 0) {
+    ctx.shadowBlur = options.isHovered ? 28 : 18;
+    ctx.shadowColor = colorToRgba(color, glowAlpha);
+  }
 
-  // Draw Label
-  ctx.fillStyle = color;
-  ctx.font = "bold 16px Inter, sans-serif";
-  ctx.fillText(person.label, bx, Math.max(18, by - 10));
+  ctx.fillStyle = colorToRgba(color, fillAlpha);
+  traceRoundedRect(ctx, bx, by, bw, bh, radius);
+  ctx.fill();
+
+  ctx.strokeStyle = colorToRgba(color, strokeAlpha);
+  ctx.lineWidth = lineWidth;
+  traceRoundedRect(ctx, bx, by, bw, bh, radius);
+  ctx.stroke();
+  ctx.restore();
+
+  const labelText = person.label;
+  ctx.save();
+  ctx.font = "700 14px Inter, system-ui, sans-serif";
+  const labelWidth = Math.ceil(ctx.measureText(labelText).width) + 22;
+  const labelHeight = 28;
+  const labelX = Math.min(
+    Math.max(layout.x + 8, bx),
+    Math.max(layout.x + 8, options.canvasWidth - labelWidth - 8),
+  );
+  const labelY = Math.max(layout.y + 8, by - labelHeight - 10);
+
+  ctx.fillStyle = colorToRgba(color, isDimmed ? 0.72 : 0.96);
+  traceRoundedRect(ctx, labelX, labelY, labelWidth, labelHeight, 14);
+  ctx.fill();
+
+  if (options.isHovered) {
+    ctx.strokeStyle = "rgba(255,255,255,0.7)";
+    ctx.lineWidth = 1.25;
+    traceRoundedRect(ctx, labelX, labelY, labelWidth, labelHeight, 14);
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = "rgba(255,255,255,0.98)";
+  ctx.textBaseline = "middle";
+  ctx.fillText(labelText, labelX + 11, labelY + labelHeight / 2 + 0.5);
+
+  if (options.isHovered) {
+    ctx.font = "600 11px Inter, system-ui, sans-serif";
+    const statusText =
+      options.isSelectionConstrained && options.isSelected
+        ? "Selected"
+        : "Click to select";
+    const statusWidth = Math.ceil(ctx.measureText(statusText).width) + 18;
+    const statusHeight = 22;
+    const statusX = Math.min(
+      Math.max(layout.x + 8, labelX),
+      Math.max(layout.x + 8, options.canvasWidth - statusWidth - 8),
+    );
+    const statusY = Math.min(
+      Math.max(layout.y + 8, labelY + labelHeight + 6),
+      by + bh + 10,
+    );
+
+    ctx.fillStyle = "rgba(15,23,42,0.76)";
+    traceRoundedRect(ctx, statusX, statusY, statusWidth, statusHeight, 11);
+    ctx.fill();
+    ctx.fillStyle = "rgba(255,255,255,0.92)";
+    ctx.fillText(statusText, statusX + 9, statusY + statusHeight / 2 + 0.5);
+  }
+  ctx.restore();
+
+  return {
+    area: Math.max(1, bw * bh),
+    height: bh,
+    hitHeight: bh + hitPadding * 2,
+    hitWidth: bw + hitPadding * 2,
+    hitX: bx - hitPadding,
+    hitY: by - hitPadding,
+    id: person.id,
+    width: bw,
+    x: bx,
+    y: by,
+  };
 };
 
 const frameArea = ([x1, y1, x2, y2]: BoundingBox) =>
   Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+
+const getTrackingEntriesForFrame = (
+  trackingData: TrackingDataset,
+  frameIndex: number,
+): TrackingEntry[] =>
+  trackingData.frames[frameIndex.toString()] ??
+  trackingData.frames[(frameIndex + 1).toString()] ??
+  trackingData.frames[(frameIndex - 1).toString()] ??
+  [];
+
+const getOverlayRegionAtPoint = (
+  regions: OverlayRegion[],
+  x: number,
+  y: number,
+): OverlayRegion | null => {
+  let bestMatch: OverlayRegion | null = null;
+
+  regions.forEach((region) => {
+    const withinX = x >= region.hitX && x <= region.hitX + region.hitWidth;
+    const withinY = y >= region.hitY && y <= region.hitY + region.hitHeight;
+    if (!withinX || !withinY) {
+      return;
+    }
+
+    if (!bestMatch || region.area < bestMatch.area) {
+      bestMatch = region;
+    }
+  });
+
+  return bestMatch;
+};
 
 const buildTrackingDataFromFaces = (
   faces: FaceInfo[],
@@ -488,6 +664,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
+  const hoveredPersonIdRef = useRef<PersonId | null>(null);
+  const overlayRegionsRef = useRef<OverlayRegion[]>([]);
+  const pointerPositionRef = useRef<{ x: number; y: number } | null>(null);
   const facePanelDragRef = useRef<{
     originX: number;
     originY: number;
@@ -503,6 +682,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [faceControlMode, setFaceControlMode] = useState(false);
   const [selectedPersonIds, setSelectedPersonIds] = useState<PersonId[]>([]);
   const [appliedSelectedIds, setAppliedSelectedIds] = useState<PersonId[]>([]);
+  const [hoveredPersonId, setHoveredPersonId] = useState<PersonId | null>(null);
   const [hasFaceSelectionConfigured, setHasFaceSelectionConfigured] = useState(false);
   const [facePanelPosition, setFacePanelPosition] = useState({ x: 24, y: 118 });
 
@@ -613,6 +793,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const allVisibleFacesSelected =
     visiblePersonMetaData.length > 0 &&
     selectedPersonIds.length === visiblePersonMetaData.length;
+  const canInteractWithStageFaces =
+    !selectionMode && visiblePersonMetaData.length > 0;
 
   const getPersonColor = useCallback(
     (id: PersonId) => {
@@ -719,6 +901,84 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   };
 
+  const syncHoveredPerson = useCallback((nextHoveredPersonId: PersonId | null) => {
+    hoveredPersonIdRef.current = nextHoveredPersonId;
+    setHoveredPersonId((previous) =>
+      previous === nextHoveredPersonId ? previous : nextHoveredPersonId,
+    );
+  }, []);
+
+  const getCanvasPoint = useCallback(
+    (
+      event:
+        | React.MouseEvent<HTMLCanvasElement>
+        | React.PointerEvent<HTMLCanvasElement>,
+    ): { x: number; y: number } | null => {
+      const canvas = canvasRef.current;
+      if (!canvas) {
+        return null;
+      }
+
+      const bounds = canvas.getBoundingClientRect();
+      if (bounds.width <= 0 || bounds.height <= 0) {
+        return null;
+      }
+
+      return {
+        x: ((event.clientX - bounds.left) / bounds.width) * canvas.width,
+        y: ((event.clientY - bounds.top) / bounds.height) * canvas.height,
+      };
+    },
+    [],
+  );
+
+  const resolveOverlayRegion = useCallback(
+    (point: { x: number; y: number } | null): OverlayRegion | null => {
+      if (!point) {
+        return null;
+      }
+      return getOverlayRegionAtPoint(overlayRegionsRef.current, point.x, point.y);
+    },
+    [],
+  );
+
+  const handleCanvasPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+    if (!canInteractWithStageFaces) {
+      return;
+    }
+
+    const point = getCanvasPoint(event);
+    if (!point) {
+      return;
+    }
+
+    pointerPositionRef.current = point;
+    syncHoveredPerson(resolveOverlayRegion(point)?.id ?? null);
+  };
+
+  const handleCanvasPointerLeave = () => {
+    pointerPositionRef.current = null;
+    syncHoveredPerson(null);
+  };
+
+  const handleCanvasClick = (event: React.MouseEvent<HTMLCanvasElement>) => {
+    if (!canInteractWithStageFaces) {
+      return;
+    }
+
+    const point = getCanvasPoint(event);
+    const targetRegion = resolveOverlayRegion(point);
+    if (!targetRegion) {
+      return;
+    }
+
+    togglePersonSelection(targetRegion.id);
+  };
+
+  useEffect(() => {
+    hoveredPersonIdRef.current = hoveredPersonId;
+  }, [hoveredPersonId]);
+
   const handleFacePanelPointerDown = (
     event: React.PointerEvent<HTMLDivElement>,
   ) => {
@@ -791,7 +1051,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     setStartTime(0);
     setEndTime(0);
     setTempSelection([0, 0]);
-  }, [videoSrc, faces, fps, useLiveTracking]);
+    pointerPositionRef.current = null;
+    overlayRegionsRef.current = [];
+    syncHoveredPerson(null);
+  }, [videoSrc, faces, fps, syncHoveredPerson, useLiveTracking]);
 
   // Setup canvas drawing loop
   useEffect(() => {
@@ -803,6 +1066,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    const activeSelectedPersonIds = faceControlMode
+      ? selectedPersonIds
+      : appliedSelectedIds;
+    const activeSelectedSet = new Set(activeSelectedPersonIds);
 
     const renderFrame = () => {
       const layout = calculateVideoLayout(
@@ -815,36 +1082,57 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (layout.width > 0) {
         drawVideoFrame(ctx, video, canvas.width, canvas.height, layout);
 
-        // DRAW BOUNDING BOXES
         const currentFrame = Math.round(
           video.currentTime * Math.max(trackingData.video_metadata.fps, 1),
         );
-        const frameData =
-          trackingData.frames[currentFrame.toString()] ??
-          trackingData.frames[(currentFrame + 1).toString()] ??
-          trackingData.frames[(currentFrame - 1).toString()];
+        const frameData = getTrackingEntriesForFrame(trackingData, currentFrame);
+        const overlayRegions: OverlayRegion[] = [];
 
-        if (frameData) {
+        if (frameData.length > 0) {
           const scaleX = layout.width / Math.max(video.videoWidth, 1);
           const scaleY = layout.height / Math.max(video.videoHeight, 1);
           frameData.forEach((person) => {
-            if (
-              (faceControlMode && !selectedPersonIds.includes(person.id)) ||
-              (!faceControlMode &&
-                hasFaceSelectionConfigured &&
-                !appliedSelectedIds.includes(person.id))
-            ) {
-              return;
-            }
-            drawPersonOverlay(
-              ctx,
-              person,
-              layout,
-              scaleX,
-              scaleY,
-              getPersonColor(person.id),
+            const isSelected =
+              !hasFaceSelectionConfigured || activeSelectedSet.has(person.id);
+            overlayRegions.push(
+              drawPersonOverlay(
+                ctx,
+                person,
+                layout,
+                scaleX,
+                scaleY,
+                getPersonColor(person.id),
+                {
+                  canvasWidth: canvas.width,
+                  isHovered:
+                    canInteractWithStageFaces &&
+                    hoveredPersonIdRef.current === person.id,
+                  isSelected,
+                  isSelectionConstrained: hasFaceSelectionConfigured,
+                },
+              ),
             );
           });
+        }
+
+        overlayRegionsRef.current = overlayRegions;
+
+        if (!canInteractWithStageFaces) {
+          if (hoveredPersonIdRef.current !== null) {
+            syncHoveredPerson(null);
+          }
+          pointerPositionRef.current = null;
+        } else if (pointerPositionRef.current) {
+          const hoveredRegion = getOverlayRegionAtPoint(
+            overlayRegions,
+            pointerPositionRef.current.x,
+            pointerPositionRef.current.y,
+          );
+          if ((hoveredRegion?.id ?? null) !== hoveredPersonIdRef.current) {
+            syncHoveredPerson(hoveredRegion?.id ?? null);
+          }
+        } else if (overlayRegions.length === 0 && hoveredPersonIdRef.current !== null) {
+          syncHoveredPerson(null);
         }
       }
 
@@ -857,11 +1145,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       cancelAnimationFrame(animationFrameId);
     };
   }, [
+    canInteractWithStageFaces,
     faceControlMode,
-    selectedPersonIds,
     appliedSelectedIds,
+    selectedPersonIds,
     hasFaceSelectionConfigured,
     getPersonColor,
+    syncHoveredPerson,
     trackingData,
   ]);
 
@@ -904,6 +1194,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     updateSize();
     return () => observer?.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (canInteractWithStageFaces || hoveredPersonId === null) {
+      return;
+    }
+    syncHoveredPerson(null);
+  }, [canInteractWithStageFaces, hoveredPersonId, syncHoveredPerson]);
 
   const handleFaceSwap = () => {
     const chosenIds = hasFaceSelectionConfigured ? appliedSelectedIds : [];
@@ -1206,23 +1503,49 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         </div>
 
-        <div className="flex min-h-0 flex-1 flex-col justify-center gap-4 py-4 md:gap-5 md:py-5">
-          <div className="flex min-h-0 flex-1 items-center justify-center">
+        <div
+          className={`flex min-h-0 flex-1 flex-col transition-all duration-300 ${
+            selectionMode
+              ? "justify-start gap-6 py-2 md:gap-6"
+              : "justify-center gap-4 py-4 md:gap-5 md:py-5"
+          }`}
+        >
+          <div
+            className={`flex min-h-0 flex-1 justify-center transition-all duration-300 ${
+              selectionMode ? "items-start pt-2" : "items-center"
+            }`}
+          >
             <div
               ref={stageRef}
               data-stage-shell="true"
-              className="relative aspect-video w-full max-w-[1120px] overflow-hidden rounded-[34px] border border-white/75 bg-slate-950 shadow-[0_40px_120px_rgba(15,23,42,0.24)] ring-1 ring-black/5"
+              className={`relative aspect-video w-full overflow-hidden rounded-[34px] border border-white/75 bg-slate-950 shadow-[0_40px_120px_rgba(15,23,42,0.24)] ring-1 ring-black/5 transition-[width,max-height,transform,box-shadow] duration-300 ${
+                selectionMode ? "max-w-[980px]" : "max-w-[1120px]"
+              }`}
               style={{
-                width: "min(84vw, 1120px)",
-                maxHeight: selectionMode ? "54vh" : "64vh",
+                width: selectionMode ? "min(72vw, 980px)" : "min(84vw, 1120px)",
+                maxHeight: selectionMode ? "46vh" : "64vh",
               }}
             >
               <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),transparent_18%,transparent_82%,rgba(255,255,255,0.05))]" />
               <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/24 to-transparent" />
               <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/44 to-transparent" />
+              {!selectionMode && visiblePersonMetaData.length > 0 && (
+                <div className="pointer-events-none absolute bottom-4 left-4 z-10 rounded-full border border-white/20 bg-black/48 px-3 py-1.5 text-xs font-medium text-white/82 shadow-[0_14px_32px_rgba(15,23,42,0.22)] backdrop-blur-md">
+                  Hover and click face boxes to toggle selection
+                </div>
+              )}
               <canvas
                 ref={canvasRef}
                 className="block h-full w-full"
+                onClick={handleCanvasClick}
+                onPointerLeave={handleCanvasPointerLeave}
+                onPointerMove={handleCanvasPointerMove}
+                style={{
+                  cursor:
+                    canInteractWithStageFaces && hoveredPersonId
+                      ? "pointer"
+                      : "default",
+                }}
               />
             </div>
           </div>
@@ -1254,7 +1577,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
           <div className="flex items-center justify-between px-4 py-3 text-xs text-slate-500">
             <span>
-              Click faces to include them in the swap.
+              Click faces here or directly on the video to include them in the swap.
             </span>
             <span>{selectedPersonIds.length} selected</span>
           </div>
@@ -1268,23 +1591,33 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <div className="grid grid-cols-3 gap-3">
                 {visiblePersonMetaData.map((person) => {
                   const isSelected = selectedPersonIds.includes(person.id);
+                  const isHovered = hoveredPersonId === person.id;
                   return (
                     <button
                       key={person.id}
                       onClick={() => togglePersonSelection(person.id)}
+                      onFocus={() => syncHoveredPerson(person.id)}
+                      onBlur={() => syncHoveredPerson(null)}
+                      onPointerEnter={() => syncHoveredPerson(person.id)}
+                      onPointerLeave={() => syncHoveredPerson(null)}
                       className="group text-left"
                     >
                       <div
                         className={`relative overflow-hidden rounded-2xl border-2 transition-all ${
                           isSelected
                             ? "scale-[1.02] shadow-[0_12px_32px_rgba(15,23,42,0.14)]"
-                            : "border-slate-200 opacity-72 hover:opacity-100"
+                            : isHovered
+                              ? "scale-[1.01] opacity-100"
+                              : "border-slate-200 opacity-72 hover:opacity-100"
                         }`}
                         style={{
-                          borderColor: isSelected ? person.color : undefined,
+                          borderColor:
+                            isSelected || isHovered ? person.color : undefined,
                           boxShadow: isSelected
                             ? `0 14px 32px -18px ${person.color}`
-                            : undefined,
+                            : isHovered
+                              ? `0 12px 26px -20px ${person.color}`
+                              : undefined,
                         }}
                       >
                         <div className="aspect-square bg-slate-950">
@@ -1353,8 +1686,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       )}
 
       <div
-        className={`mx-auto mt-auto w-full shrink-0 px-2 ${
-          selectionMode ? "max-w-6xl" : "max-w-5xl"
+        className={`mx-auto w-full shrink-0 px-2 transition-all duration-300 ${
+          selectionMode ? "max-w-6xl pt-2" : "mt-auto max-w-5xl"
         }`}
       >
         <TooltipProvider>
