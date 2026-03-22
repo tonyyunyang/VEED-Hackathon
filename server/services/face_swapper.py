@@ -109,17 +109,10 @@ def _generate_face_runware(
 
         RUNWARE_WS_URL = "wss://ws-api.runware.ai/v1"
 
-        # Encode thumbnail as data URI
-        with open(thumbnail_path, "rb") as f:
-            seed_b64 = base64.b64encode(f.read()).decode("utf-8")
-        ext = Path(thumbnail_path).suffix.lower().lstrip(".")
-        mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp"}.get(ext, "jpeg")
-        seed_data_uri = f"data:image/{mime};base64,{seed_b64}"
-
         prompt = _build_runware_prompt(age, gender, style_prompt)
         logger.info("Runware prompt: %s", prompt)
 
-        task_uuid = uuid.uuid4().hex
+        task_uuid = str(uuid.uuid4())
 
         with ws_sync.connect(RUNWARE_WS_URL, max_size=None, open_timeout=15) as conn:
             # Authenticate
@@ -134,37 +127,60 @@ def _generate_face_runware(
                         logger.warning("Runware auth failed: %s", item)
                         return None
 
-            # Send image inference request
-            conn.send(json.dumps([{
+            logger.info("Runware auth OK, sending text-to-image inference request")
+
+            # Send text-to-image request (no seed — thumbnails are too low
+            # quality for img2img; the prompt carries the demographics)
+            request_payload = {
                 "taskType": "imageInference",
                 "taskUUID": task_uuid,
                 "model": "runware:101@1",
                 "positivePrompt": prompt,
-                "seedImage": seed_data_uri,
-                "strength": 0.55,
                 "width": 512,
                 "height": 512,
                 "steps": 30,
                 "numberResults": 1,
                 "outputType": "URL",
                 "outputFormat": "JPG",
-            }]))
+            }
+            conn.send(json.dumps([request_payload]))
 
             # Wait for result (poll messages until we get our task back)
             image_url = None
-            for _ in range(60):  # up to ~60 recv calls
-                raw = conn.recv(timeout=60)
+            for attempt in range(30):
+                raw = conn.recv(timeout=120)
                 msg = json.loads(raw)
-                data_list = msg.get("data") if isinstance(msg, dict) else msg
+                logger.debug("Runware recv #%d: %s", attempt, str(msg)[:500])
+
+                # Handle both {"data": [...]} wrapper and raw list formats
+                if isinstance(msg, dict):
+                    if msg.get("error") or msg.get("errors"):
+                        logger.warning("Runware error response: %s", msg)
+                        return None
+                    data_list = msg.get("data", [])
+                elif isinstance(msg, list):
+                    data_list = msg
+                else:
+                    continue
+
                 if not isinstance(data_list, list):
                     continue
+
                 for item in data_list:
-                    if item.get("taskUUID") == task_uuid and item.get("imageURL"):
-                        image_url = item["imageURL"]
-                        break
+                    if not isinstance(item, dict):
+                        continue
+                    # Check for task-specific error
                     if item.get("taskUUID") == task_uuid and item.get("error"):
                         logger.warning("Runware task error: %s", item)
                         return None
+                    # Check for global errors (e.g. invalid request)
+                    if item.get("errorId") or item.get("errorMessage"):
+                        logger.warning("Runware error: %s", item)
+                        return None
+                    # Check for our result
+                    if item.get("taskUUID") == task_uuid and item.get("imageURL"):
+                        image_url = item["imageURL"]
+                        break
                 if image_url:
                     break
 
