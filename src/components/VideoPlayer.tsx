@@ -22,6 +22,10 @@ import {
   GripHorizontal,
   X,
   Film,
+  Upload,
+  Sparkles,
+  Wand2,
+  ImagePlus,
 } from "lucide-react";
 
 type PersonId = string;
@@ -647,6 +651,7 @@ interface VideoPlayerProps {
   onSwap?: (
     selectedIds: string[],
     frameWindow: { startFrame: number; endFrame: number },
+    swapOptions?: { referenceFile?: File; stylePrompt?: string },
   ) => void;
   onBack?: () => void;
 }
@@ -685,6 +690,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [hoveredPersonId, setHoveredPersonId] = useState<PersonId | null>(null);
   const [hasFaceSelectionConfigured, setHasFaceSelectionConfigured] = useState(false);
   const [facePanelPosition, setFacePanelPosition] = useState({ x: 24, y: 118 });
+  const [showSwapOptions, setShowSwapOptions] = useState(false);
+  const [stylePrompt, setStylePrompt] = useState("");
+  const [referenceFile, setReferenceFile] = useState<File | null>(null);
+  const [referencePreview, setReferencePreview] = useState<string | null>(null);
+  const referenceInputRef = useRef<HTMLInputElement>(null);
 
   // Selection state (timeframe isolation)
   const [startTime, setStartTime] = useState(0);
@@ -1202,6 +1212,36 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     syncHoveredPerson(null);
   }, [canInteractWithStageFaces, hoveredPersonId, syncHoveredPerson]);
 
+  const handleReferenceFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setReferenceFile(file);
+    if (referencePreview) URL.revokeObjectURL(referencePreview);
+    setReferencePreview(URL.createObjectURL(file));
+  };
+
+  const clearReference = () => {
+    setReferenceFile(null);
+    if (referencePreview) URL.revokeObjectURL(referencePreview);
+    setReferencePreview(null);
+    if (referenceInputRef.current) referenceInputRef.current.value = "";
+  };
+
+  const handleConfirmSwap = () => {
+    const chosenIds = hasFaceSelectionConfigured ? appliedSelectedIds : [];
+    if (chosenIds.length === 0 || !onSwap) return;
+    const normalizedEndFrame = Math.max(clipStartFrame + 1, clipEndFrame);
+    onSwap(
+      chosenIds,
+      { startFrame: clipStartFrame, endFrame: normalizedEndFrame },
+      {
+        referenceFile: referenceFile || undefined,
+        stylePrompt: stylePrompt.trim() || undefined,
+      },
+    );
+    setShowSwapOptions(false);
+  };
+
   const handleFaceSwap = () => {
     const chosenIds = hasFaceSelectionConfigured ? appliedSelectedIds : [];
 
@@ -1211,11 +1251,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
 
     if (onSwap) {
-      const normalizedEndFrame = Math.max(clipStartFrame + 1, clipEndFrame);
-      onSwap(chosenIds, {
-        startFrame: clipStartFrame,
-        endFrame: normalizedEndFrame,
-      });
+      setShowSwapOptions(true);
       return;
     }
 
@@ -1680,6 +1716,130 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
                 Selection updates live
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSwapOptions && (
+        <div className="absolute left-1/2 top-1/2 z-40 w-[420px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 animate-in fade-in zoom-in-95 duration-200">
+          <div className="overflow-hidden rounded-[28px] border border-white/80 bg-white/92 shadow-[0_40px_120px_rgba(15,23,42,0.22)] backdrop-blur-2xl">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-[0_4px_12px_rgba(124,58,237,0.3)]">
+                  <Wand2 className="h-4 w-4" />
+                </div>
+                <div>
+                  <h3 className="text-[15px] font-bold text-slate-900">Swap Options</h3>
+                  <p className="text-[11px] text-slate-500">{appliedFaceCount} face{appliedFaceCount === 1 ? "" : "s"} selected</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowSwapOptions(false)}
+                className="rounded-full p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-4 p-5">
+              {/* Option 1: Upload Reference Image */}
+              <div className="group rounded-2xl border border-slate-200 bg-slate-50/60 p-4 transition-all hover:border-violet-200 hover:bg-violet-50/40">
+                <div className="mb-3 flex items-center gap-2">
+                  <ImagePlus className="h-4 w-4 text-violet-600" />
+                  <span className="text-[13px] font-semibold text-slate-800">Reference Face</span>
+                  <span className="ml-auto rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-violet-600">
+                    Highest priority
+                  </span>
+                </div>
+                <p className="mb-3 text-[12px] leading-relaxed text-slate-500">
+                  Upload a photo of the face you want to swap in. This overrides all other sources.
+                </p>
+
+                {referencePreview ? (
+                  <div className="flex items-center gap-3">
+                    <div className="relative h-16 w-16 overflow-hidden rounded-xl border-2 border-violet-300 shadow-[0_4px_16px_rgba(124,58,237,0.15)]">
+                      <img src={referencePreview} alt="Reference" className="h-full w-full object-cover" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="truncate text-[12px] font-medium text-slate-700">{referenceFile?.name}</p>
+                      <button
+                        onClick={clearReference}
+                        className="mt-1 text-[11px] font-medium text-red-500 transition-colors hover:text-red-700"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => referenceInputRef.current?.click()}
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 py-3 text-[12px] font-medium text-slate-500 transition-all hover:border-violet-400 hover:bg-violet-50 hover:text-violet-700"
+                  >
+                    <Upload className="h-3.5 w-3.5" />
+                    Choose image
+                  </button>
+                )}
+                <input
+                  ref={referenceInputRef}
+                  type="file"
+                  accept=".jpg,.jpeg,.png,.webp"
+                  onChange={handleReferenceFileChange}
+                  className="hidden"
+                />
+              </div>
+
+              {/* Option 2: Style Prompt */}
+              <div className="group rounded-2xl border border-slate-200 bg-slate-50/60 p-4 transition-all hover:border-amber-200 hover:bg-amber-50/30">
+                <div className="mb-3 flex items-center gap-2">
+                  <Sparkles className="h-4 w-4 text-amber-600" />
+                  <span className="text-[13px] font-semibold text-slate-800">AI Style</span>
+                  <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700">
+                    AI generated
+                  </span>
+                </div>
+                <p className="mb-3 text-[12px] leading-relaxed text-slate-500">
+                  Describe accessories or styles for the generated face. Only applies when no reference image is provided.
+                </p>
+                <input
+                  type="text"
+                  value={stylePrompt}
+                  onChange={(e) => setStylePrompt(e.target.value)}
+                  placeholder="e.g. wearing sunglasses, with face paint..."
+                  maxLength={200}
+                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-[13px] text-slate-800 placeholder:text-slate-400 transition-all focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-100"
+                />
+                <div className="mt-1.5 text-right text-[10px] text-slate-400">{stylePrompt.length}/200</div>
+              </div>
+
+              {/* Divider hint */}
+              {!referenceFile && !stylePrompt && (
+                <p className="text-center text-[11px] text-slate-400">
+                  Leave both empty to auto-generate a neutral replacement face
+                </p>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center gap-3 border-t border-slate-200 px-5 py-4">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowSwapOptions(false)}
+                className="flex-1 text-slate-600 hover:bg-slate-100"
+              >
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleConfirmSwap}
+                disabled={isSwapping}
+                className="flex-1 bg-gradient-to-r from-slate-900 to-slate-800 font-semibold text-white shadow-[0_4px_16px_rgba(15,23,42,0.2)] transition-all hover:from-slate-800 hover:to-slate-700 active:scale-[0.98] disabled:from-slate-300 disabled:to-slate-300"
+              >
+                <SmilePlus className="mr-2 h-4 w-4" />
+                {isSwapping ? "Starting..." : `Swap ${appliedFaceCount} Face${appliedFaceCount === 1 ? "" : "s"}`}
+              </Button>
             </div>
           </div>
         </div>

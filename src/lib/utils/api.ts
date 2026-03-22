@@ -37,12 +37,26 @@ export async function detectFaces(
   return res.json();
 }
 
+export async function uploadReference(
+  videoId: string,
+  file: File,
+): Promise<void> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await fetch(`/api/upload-reference/${videoId}`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error(`Reference upload failed: ${res.statusText}`);
+}
+
 export async function startSwap(
   videoId: string,
   faceIds: string[],
   options?: {
     startFrame?: number;
     endFrame?: number;
+    stylePrompt?: string;
   },
 ): Promise<string> {
   const res = await fetch("/api/swap", {
@@ -53,6 +67,7 @@ export async function startSwap(
       face_ids: faceIds,
       start_frame: options?.startFrame,
       end_frame: options?.endFrame,
+      style_prompt: options?.stylePrompt || null,
     }),
   });
   if (!res.ok) throw new Error(`Swap failed: ${res.statusText}`);
