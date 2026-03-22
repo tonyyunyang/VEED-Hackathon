@@ -92,7 +92,7 @@ export async function uploadVideo(file: File): Promise<string> {
 }
 
 export async function analyzeMediaFaces(
-  mediaId: string
+  mediaId: string,
 ): Promise<DetectFacesResponse> {
   const res = await requestApi(
     "/api/detect-faces",
@@ -107,10 +107,24 @@ export async function analyzeMediaFaces(
   return res.json();
 }
 
-export async function detectFaces(
-  mediaId: string
-): Promise<DetectFacesResponse> {
+export async function detectFaces(mediaId: string): Promise<DetectFacesResponse> {
   return analyzeMediaFaces(mediaId);
+}
+
+export async function uploadReference(
+  videoId: string,
+  file: File,
+): Promise<void> {
+  const form = new FormData();
+  form.append("file", file);
+  await requestApi(
+    `/api/upload-reference/${videoId}`,
+    {
+      method: "POST",
+      body: form,
+    },
+    "Reference upload failed",
+  );
 }
 
 export async function startFaceSwapJob(
@@ -119,6 +133,7 @@ export async function startFaceSwapJob(
   options?: {
     startFrame?: number;
     endFrame?: number;
+    stylePrompt?: string;
   },
 ): Promise<string> {
   const res = await requestApi(
@@ -131,6 +146,7 @@ export async function startFaceSwapJob(
         face_ids: faceIds,
         start_frame: options?.startFrame,
         end_frame: options?.endFrame,
+        style_prompt: options?.stylePrompt || null,
       }),
     },
     "Swap failed",
@@ -145,6 +161,7 @@ export async function startSwap(
   options?: {
     startFrame?: number;
     endFrame?: number;
+    stylePrompt?: string;
   },
 ): Promise<string> {
   return startFaceSwapJob(mediaId, faceIds, options);

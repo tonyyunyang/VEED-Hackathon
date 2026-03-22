@@ -3,7 +3,12 @@ import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import "./App.css";
 import "./index.css";
 import type { AppStep, FaceInfo } from "./types";
-import { detectFaces, uploadVideo, startSwap } from "./lib/utils/api";
+import {
+  detectFaces,
+  uploadVideo,
+  startSwap,
+  uploadReference,
+} from "./lib/utils/api";
 import { VideoUploader } from "./components/VideoUploader";
 import { ProcessingStatus } from "./components/ProcessingStatus";
 import { Gallery } from "./components/Gallery";
@@ -85,11 +90,18 @@ function App() {
   const handleSwap = async (
     selectedIds: string[],
     frameWindow?: { startFrame: number; endFrame: number },
+    swapOptions?: { referenceFile?: File; stylePrompt?: string },
   ) => {
     setIsSwapping(true);
     setError(null);
     try {
-      const jid = await startSwap(videoId, selectedIds, frameWindow);
+      if (swapOptions?.referenceFile) {
+        await uploadReference(videoId, swapOptions.referenceFile);
+      }
+      const jid = await startSwap(videoId, selectedIds, {
+        ...frameWindow,
+        stylePrompt: swapOptions?.stylePrompt,
+      });
       setJobId(jid);
       setStep("processing");
     } catch (e) {
