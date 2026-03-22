@@ -47,6 +47,44 @@ run_with_prefix() {
     PIDS+=($!)
 }
 
+# ── Dependency sync ──────────────────────────────────────────────────
+FACEFUSION_DIR="${ROOT_DIR}/facefusion-VEED"
+FACEFUSION_VENV="${FACEFUSION_DIR}/.venv/bin/python"
+# FaceFusion deps (onnxruntime, pydantic-core) require Python <=3.13.
+# The server pyproject.toml also pins >=3.11,<3.13.
+# Use uv to provision the right interpreter automatically.
+FACEFUSION_PYTHON="3.12"
+
+echo -e "${BOLD}${YELLOW}Syncing dependencies...${RESET}"
+
+# Backend (uv)
+echo -e "${GREEN}  [server] uv sync${RESET}"
+UV_CACHE_DIR="${ROOT_DIR}/.uv-cache" uv sync --directory "${ROOT_DIR}/server" --locked --all-groups
+
+# FaceFusion (uv venv + uv pip — must use Python <=3.13)
+echo -e "${BLUE}  [facefusion] uv venv (python ${FACEFUSION_PYTHON}) + uv pip install${RESET}"
+if [ ! -f "$FACEFUSION_VENV" ]; then
+    uv venv --python "$FACEFUSION_PYTHON" "${FACEFUSION_DIR}/.venv"
+fi
+# Verify the venv actually has the right Python, not the system one
+VENV_PY_VER=$("${FACEFUSION_VENV}" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+if [[ "$VENV_PY_VER" != "$FACEFUSION_PYTHON" ]]; then
+    echo -e "${YELLOW}  [facefusion] venv has Python ${VENV_PY_VER}, need ${FACEFUSION_PYTHON} — recreating${RESET}"
+    rm -rf "${FACEFUSION_DIR}/.venv"
+    uv venv --python "$FACEFUSION_PYTHON" "${FACEFUSION_DIR}/.venv"
+fi
+VIRTUAL_ENV="${FACEFUSION_DIR}/.venv" uv pip install \
+    --python "${FACEFUSION_VENV}" \
+    -r "${FACEFUSION_DIR}/requirements.txt" \
+    fastapi uvicorn python-multipart
+
+# Frontend (npm)
+echo -e "${CYAN}  [frontend] npm install${RESET}"
+cd "${ROOT_DIR}" && npm install --silent
+
+echo -e "${BOLD}${GREEN}Dependencies ready.${RESET}"
+echo ""
+
 # ── Banner ────────────────────────────────────────────────────────────
 echo -e "${BOLD}${CYAN}"
 echo "  ╔══════════════════════════════════════════════════╗"
@@ -64,16 +102,9 @@ run_with_prefix "$GREEN" "server" \
     bash -c "cd '${ROOT_DIR}/server' && UV_CACHE_DIR='${ROOT_DIR}/.uv-cache' uv run uvicorn main:app --port 8000 --reload"
 
 # ── 2. FaceFusion API ────────────────────────────────────────────────
-FACEFUSION_DIR="${ROOT_DIR}/facefusion-VEED"
-FACEFUSION_VENV="${FACEFUSION_DIR}/.venv/bin/python"
-
-if [ -f "$FACEFUSION_VENV" ]; then
-    echo -e "${BLUE}Starting FaceFusion API...${RESET}"
-    run_with_prefix "$BLUE" "facefusion" \
-        bash -c "cd '${FACEFUSION_DIR}' && '${FACEFUSION_VENV}' api.py"
-else
-    echo -e "${RED}FaceFusion venv not found at ${FACEFUSION_VENV} — skipping${RESET}"
-fi
+echo -e "${BLUE}Starting FaceFusion API...${RESET}"
+run_with_prefix "$BLUE" "facefusion" \
+    bash -c "cd '${FACEFUSION_DIR}' && '${FACEFUSION_VENV}' api.py"
 
 # ── 3. Frontend dev server ───────────────────────────────────────────
 echo -e "${CYAN}Starting frontend...${RESET}"
