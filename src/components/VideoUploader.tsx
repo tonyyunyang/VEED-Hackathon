@@ -40,7 +40,7 @@ export function VideoUploader({ onUpload, isUploading }: VideoUploaderProps) {
       const file = e.dataTransfer.files[0];
       if (file) handleFile(file);
     },
-    [handleFile]
+    [handleFile],
   );
 
   const handleUploadClick = async () => {
@@ -84,7 +84,7 @@ export function VideoUploader({ onUpload, isUploading }: VideoUploaderProps) {
   return (
     <div className="flex flex-col items-center gap-6 w-full max-w-lg">
       <div
-        className={`w-full border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-colors ${
+        className={`video-uploader__tony w-full border-2 border-dashed rounded-2xl p-12 text-center cursor-pointer transition-colors ${
           dragOver
             ? "border-primary bg-primary/5"
             : "border-muted-foreground/25 hover:border-primary/50"

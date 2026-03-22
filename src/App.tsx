@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import "./App.css";
 import "./index.css";
 import type { AppStep, FaceInfo } from "./types";
@@ -7,6 +8,7 @@ import { VideoUploader } from "./components/VideoUploader";
 import { ProcessingStatus } from "./components/ProcessingStatus";
 import { Gallery } from "./components/Gallery";
 import { VideoPlayer } from "./components/VideoPlayer";
+import { ImageEditor } from "./components/ImageEditor";
 import { PartnerStrip } from "./components/PartnerStrip";
 import { Loader2, ArrowLeft } from "lucide-react";
 
@@ -20,8 +22,11 @@ function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isSwapping, setIsSwapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [userVideos, setUserVideos] = useState<{ name: string; url: string; file: File }[]>([]);
   const uploadedPreviewUrlRef = useRef<string | null>(null);
   const uploadInFlightRef = useRef(false);
+  const navigate = useNavigate();
+  const location = useLocation();
 
   const clearUploadedPreview = () => {
     if (uploadedPreviewUrlRef.current) {
@@ -31,6 +36,15 @@ function App() {
   };
 
   useEffect(() => clearUploadedPreview, []);
+
+  // Sync route and step state
+  useEffect(() => {
+    if (location.pathname === "/" && step !== "gallery" && step !== "upload") {
+      setStep("gallery");
+    } else if (location.pathname.startsWith("/editor") && !selectedVideoSrc && step !== "detecting") {
+      navigate("/", { replace: true });
+    }
+  }, [location.pathname, step, selectedVideoSrc, navigate]);
 
   const handleUpload = async (file: File) => {
     if (uploadInFlightRef.current) return;
@@ -45,6 +59,7 @@ function App() {
     uploadedPreviewUrlRef.current = url;
     setSelectedVideoSrc(url);
     setStep("detecting");
+    navigate("/editor");
     try {
       const vid = await uploadVideo(file);
       setVideoId(vid);
@@ -87,17 +102,33 @@ function App() {
     setDetectionFps(0);
     setJobId("");
     setError(null);
+    navigate("/");
   };
 
-  const handleOpenGalleryVideo = (src: string) => {
-    clearUploadedPreview();
-    setError(null);
-    setVideoId("");
-    setFaces([]);
-    setDetectionFps(0);
-    setJobId("");
-    setSelectedVideoSrc(src);
-    setStep("player");
+  const handleOpenGalleryVideo = async (src: string | File) => {
+    try {
+      setStep("detecting");
+      navigate("/editor");
+      let file: File;
+      if (typeof src === "string") {
+        const response = await fetch(src);
+        const blob = await response.blob();
+        const filename = src.split("/").pop()?.split("?")[0] || "demo-video.mp4";
+        file = new File([blob], filename, { type: blob.type || "video/mp4" });
+      } else {
+        file = src;
+      }
+      
+      await handleUpload(file);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load demo video");
+      setStep("gallery");
+    }
+  };
+
+  const handleUserUpload = (file: File) => {
+    const url = URL.createObjectURL(file);
+    setUserVideos((prev) => [...prev, { name: file.name, url, file }]);
   };
 
   return (
@@ -182,68 +213,79 @@ function App() {
           </div>
         )}
 
-        {step === "gallery" && (
-          <Gallery
-            onSelect={handleOpenGalleryVideo}
-            onUploadClick={() => {
-              setError(null);
-              setStep("upload");
-            }}
-          />
-        )}
+        <Routes>
+          <Route path="/" element={
+            <>
+              {step === "gallery" && (
+                <Gallery
+                  userVideos={userVideos}
+                  onSelect={handleOpenGalleryVideo}
+                  onUserUpload={handleUserUpload}
+                  onImageFlowClick={() => navigate("/image-editor")}
+                />
+              )}
 
-        {step === "upload" && (
-          <div className="w-full max-w-2xl rounded-[32px] border border-white/70 bg-white/70 p-6 shadow-[0_30px_90px_rgba(15,23,42,0.10)] backdrop-blur-xl">
-            <div className="mb-6 flex items-center justify-between">
-              <button
-                onClick={() => setStep("gallery")}
-                className="flex items-center gap-2 rounded-full border border-black/8 bg-white/80 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-950"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                Back to Gallery
-              </button>
-            </div>
-            <VideoUploader onUpload={handleUpload} isUploading={isUploading} />
-          </div>
-        )}
+              {step === "upload" && (
+                <div className="w-full max-w-2xl rounded-[32px] border border-white/70 bg-white/70 p-6 shadow-[0_30px_90px_rgba(15,23,42,0.10)] backdrop-blur-xl">
+                  <div className="mb-6 flex items-center justify-between">
+                    <button
+                      onClick={() => setStep("gallery")}
+                      className="flex items-center gap-2 rounded-full border border-black/8 bg-white/80 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-950"
+                    >
+                      <ArrowLeft className="w-4 h-4" />
+                      Back to Gallery
+                    </button>
+                  </div>
+                  <VideoUploader onUpload={handleUpload} isUploading={isUploading} />
+                </div>
+              )}
+            </>
+          } />
 
-        {step === "detecting" && (
-          <div className="rounded-[32px] border border-white/70 bg-white/72 px-10 py-10 text-center shadow-[0_30px_90px_rgba(15,23,42,0.08)] backdrop-blur-2xl">
-            <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-lime-200 bg-lime-50 text-slate-900 shadow-[0_18px_36px_rgba(157,255,116,0.18)]">
-              <Loader2 className="h-7 w-7 animate-spin" />
-            </div>
-            <p className="text-lg font-semibold text-slate-900">
-              Analyzing faces...
-            </p>
-            <p className="mt-2 text-sm text-slate-600">
-              Uploading the clip, extracting frames, and preparing the review
-              editor.
-            </p>
-          </div>
-        )}
+          <Route path="/editor" element={
+            <>
+              {step === "detecting" && (
+                <div className="rounded-[32px] border border-white/70 bg-white/72 px-10 py-10 text-center shadow-[0_30px_90px_rgba(15,23,42,0.08)] backdrop-blur-2xl">
+                  <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-lime-200 bg-lime-50 text-slate-900 shadow-[0_18px_36px_rgba(157,255,116,0.18)]">
+                    <Loader2 className="h-7 w-7 animate-spin" />
+                  </div>
+                  <p className="text-lg font-semibold text-slate-900">
+                    Analyzing faces...
+                  </p>
+                  <p className="mt-2 text-sm text-slate-600">
+                    Uploading the clip, extracting frames, and preparing the review
+                    editor.
+                  </p>
+                </div>
+              )}
 
-        {step === "processing" && (
-          <ProcessingStatus
-            jobId={jobId}
-            onRetry={() => setStep("player")}
-            onStartOver={handleStartOver}
-          />
-        )}
+              {step === "processing" && (
+                <ProcessingStatus
+                  jobId={jobId}
+                  onRetry={() => setStep("player")}
+                  onStartOver={handleStartOver}
+                />
+              )}
 
-        {step === "player" && (
-          <div className="fixed inset-0 z-50 h-screen w-full">
-            <VideoPlayer
-              videoSrc={selectedVideoSrc}
-              faces={faces}
-              fps={detectionFps}
-              useLiveTracking={Boolean(videoId)}
-              error={error}
-              isSwapping={isSwapping}
-              onSwap={videoId ? handleSwap : undefined}
-              onBack={handleStartOver}
-            />
-          </div>
-        )}
+              {step === "player" && (
+                <div className="fixed inset-0 z-50 h-screen w-full">
+                  <VideoPlayer
+                    videoSrc={selectedVideoSrc}
+                    faces={faces}
+                    fps={detectionFps}
+                    useLiveTracking={Boolean(videoId)}
+                    error={error}
+                    isSwapping={isSwapping}
+                    onSwap={videoId ? handleSwap : undefined}
+                    onBack={handleStartOver}
+                  />
+                </div>
+              )}
+            </>
+          } />
+
+          <Route path="/image-editor" element={<ImageEditor />} />
+        </Routes>
       </div>
     </div>
   );
