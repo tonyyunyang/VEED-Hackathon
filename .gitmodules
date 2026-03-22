@@ -1,8 +1,8 @@
 [submodule "face-detect-track"]
 	path = face-detect-track
-	url = git@github.com:tonyyunyang/face-detect-track.git
+	url = https://github.com/tonyyunyang/face-detect-track.git
 	branch = main
 [submodule "facefusion-VEED"]
 	path = facefusion-VEED
-	url = git@github.com:tonyyunyang/facefusion-VEED.git
+	url = https://github.com/tonyyunyang/facefusion-VEED.git
 	branch = main
