@@ -4,6 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "start": "bash scripts/start.sh",
     "dev": "vite",
     "server": "cd server && UV_CACHE_DIR=${UV_CACHE_DIR:-../.uv-cache} uv run uvicorn main:app --port 8000",
     "build": "tsc -b && vite build",

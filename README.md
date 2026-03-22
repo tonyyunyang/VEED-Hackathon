@@ -70,23 +70,20 @@ If you want the shortest path to a working local setup:
    server/reference_faces/
    ```
 
-7. Start the backend:
+7. Start all services:
 
    ```bash
-   npm run server
+   npm start
    ```
 
-8. Start the frontend in a second terminal:
+   This launches the backend, FaceFusion API, and frontend together in one terminal with color-coded logs.
 
-   ```bash
-   npm run dev -- --host 127.0.0.1
-   ```
+8. Open the app:
 
-9. Open the app:
-
-   - frontend: `http://127.0.0.1:5173`
-   - backend: `http://127.0.0.1:8000`
-   - backend docs: `http://127.0.0.1:8000/docs`
+   - frontend: `http://localhost:5173`
+   - backend: `http://localhost:8000`
+   - backend docs: `http://localhost:8000/docs`
+   - FaceFusion API docs: `http://localhost:8001/docs`
 
 ## Clone And Submodules
 
@@ -380,37 +377,45 @@ If you change FaceFusion model settings later, FaceFusion may still request addi
 
 ## Run The App
 
-Open two terminals from the repo root.
+### All services at once (recommended)
 
-### Terminal 1: backend
+```bash
+npm start
+```
+
+This single command launches all three services with color-coded, prefixed logs:
+
+| Service | Label | URL |
+| --- | --- | --- |
+| Backend (FastAPI) | `[server]` | `http://localhost:8000` |
+| FaceFusion API | `[facefusion]` | `http://localhost:8001` |
+| Frontend (Vite) | `[frontend]` | `http://localhost:5173` |
+
+Press `Ctrl+C` to stop all services at once. If the FaceFusion virtualenv is not found, that service is skipped with a warning.
+
+### Running services individually
+
+If you prefer separate terminals:
+
+#### Terminal 1: backend
 
 ```bash
 npm run server
 ```
 
-That command runs:
+#### Terminal 2: FaceFusion API
 
 ```bash
-cd server && UV_CACHE_DIR=${UV_CACHE_DIR:-../.uv-cache} uv run uvicorn main:app --port 8000
+cd facefusion-VEED && .venv/bin/python api.py
 ```
 
-Default backend URL:
-
-```text
-http://127.0.0.1:8000
-```
-
-### Terminal 2: frontend
+#### Terminal 3: frontend
 
 ```bash
 npm run dev -- --host 127.0.0.1
 ```
 
-Default frontend URL:
-
-```text
-http://127.0.0.1:5173
-```
+### Notes
 
 The Vite dev server proxies `/api` requests to `http://localhost:8000` unless you override `VITE_BACKEND_TARGET`.
 
