@@ -22,7 +22,9 @@ function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [isSwapping, setIsSwapping] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [userVideos, setUserVideos] = useState<{ name: string; url: string; file: File }[]>([]);
+  const [userVideos, setUserVideos] = useState<
+    { name: string; url: string; file: File }[]
+  >([]);
   const uploadedPreviewUrlRef = useRef<string | null>(null);
   const uploadInFlightRef = useRef(false);
   const navigate = useNavigate();
@@ -41,7 +43,11 @@ function App() {
   useEffect(() => {
     if (location.pathname === "/" && step !== "gallery" && step !== "upload") {
       setStep("gallery");
-    } else if (location.pathname.startsWith("/editor") && !selectedVideoSrc && step !== "detecting") {
+    } else if (
+      location.pathname.startsWith("/editor") &&
+      !selectedVideoSrc &&
+      step !== "detecting"
+    ) {
       navigate("/", { replace: true });
     }
   }, [location.pathname, step, selectedVideoSrc, navigate]);
@@ -113,12 +119,13 @@ function App() {
       if (typeof src === "string") {
         const response = await fetch(src);
         const blob = await response.blob();
-        const filename = src.split("/").pop()?.split("?")[0] || "demo-video.mp4";
+        const filename =
+          src.split("/").pop()?.split("?")[0] || "demo-video.mp4";
         file = new File([blob], filename, { type: blob.type || "video/mp4" });
       } else {
         file = src;
       }
-      
+
       await handleUpload(file);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load demo video");
@@ -150,12 +157,12 @@ function App() {
                 VEED Hackathon Build
               </div>
               <h1 className="max-w-3xl bg-[linear-gradient(135deg,#111827_0%,#2b344f_32%,#6b63ff_62%,#62d59a_100%)] bg-clip-text text-5xl font-black tracking-tight text-transparent md:text-6xl">
-                Face swapping, but with a real review editor.
+                Face swapping, but with an editor.
               </h1>
               <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600">
-                Upload a short clip, inspect tracked faces, trim the exact range,
-                and launch the swap from one polished workspace instead of a pile
-                of disconnected steps.
+                Upload a short clip, inspect tracked faces, trim the exact
+                range, and launch the swap from one polished workspace instead
+                of a pile of disconnected steps.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <div className="rounded-full border border-lime-200 bg-lime-50/90 px-4 py-2 text-sm font-semibold text-lime-900 shadow-[0_12px_24px_rgba(157,255,116,0.18)]">
@@ -172,30 +179,6 @@ function App() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-3 lg:grid-cols-1">
-              <div className="rounded-[28px] border border-white/70 bg-[linear-gradient(135deg,rgba(255,255,255,0.88),rgba(244,251,236,0.92))] p-5 shadow-[0_20px_50px_rgba(15,23,42,0.06)]">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                  Input
-                </div>
-                <div className="mt-2 text-2xl font-black tracking-tight text-slate-900">
-                  10 sec clips
-                </div>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Fast enough for a live demo, detailed enough to show real track
-                  review.
-                </p>
-              </div>
-              <div className="rounded-[28px] border border-white/70 bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(241,247,255,0.94))] p-5 shadow-[0_20px_50px_rgba(15,23,42,0.06)]">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
-                  Review
-                </div>
-                <div className="mt-2 text-2xl font-black tracking-tight text-slate-900">
-                  Track first
-                </div>
-                <p className="mt-2 text-sm leading-6 text-slate-600">
-                  See who the system found before sending anything into the swap
-                  job.
-                </p>
-              </div>
               <div className="rounded-[28px] border border-white/70 bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(248,241,255,0.94))] p-5 shadow-[0_20px_50px_rgba(15,23,42,0.06)]">
                 <div className="text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">
                   Output
@@ -204,8 +187,8 @@ function App() {
                   One clean flow
                 </div>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Selection, preview, render state, and download all stay inside a
-                  single product surface.
+                  Selection, preview, render state, and download all stay inside
+                  a single product surface.
                 </p>
               </div>
             </div>
@@ -219,75 +202,84 @@ function App() {
         )}
 
         <Routes>
-          <Route path="/" element={
-            <>
-              {step === "gallery" && (
-                <Gallery
-                  userVideos={userVideos}
-                  onSelect={handleOpenGalleryVideo}
-                  onUserUpload={handleUserUpload}
-                  onImageFlowClick={handleOpenImageFlow}
-                />
-              )}
-
-              {step === "upload" && (
-                <div className="w-full max-w-2xl rounded-[32px] border border-white/70 bg-white/70 p-6 shadow-[0_30px_90px_rgba(15,23,42,0.10)] backdrop-blur-xl">
-                  <div className="mb-6 flex items-center justify-between">
-                    <button
-                      onClick={() => setStep("gallery")}
-                      className="flex items-center gap-2 rounded-full border border-black/8 bg-white/80 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-950"
-                    >
-                      <ArrowLeft className="w-4 h-4" />
-                      Back to Gallery
-                    </button>
-                  </div>
-                  <VideoUploader onUpload={handleUpload} isUploading={isUploading} />
-                </div>
-              )}
-            </>
-          } />
-
-          <Route path="/editor" element={
-            <>
-              {step === "detecting" && (
-                <div className="rounded-[32px] border border-white/70 bg-white/72 px-10 py-10 text-center shadow-[0_30px_90px_rgba(15,23,42,0.08)] backdrop-blur-2xl">
-                  <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-lime-200 bg-lime-50 text-slate-900 shadow-[0_18px_36px_rgba(157,255,116,0.18)]">
-                    <Loader2 className="h-7 w-7 animate-spin" />
-                  </div>
-                  <p className="text-lg font-semibold text-slate-900">
-                    Analyzing faces...
-                  </p>
-                  <p className="mt-2 text-sm text-slate-600">
-                    Uploading the clip, extracting frames, and preparing the review
-                    editor.
-                  </p>
-                </div>
-              )}
-
-              {step === "processing" && (
-                <ProcessingStatus
-                  jobId={jobId}
-                  onRetry={() => setStep("player")}
-                  onStartOver={handleStartOver}
-                />
-              )}
-
-              {step === "player" && (
-                <div className="fixed inset-0 z-50 h-screen w-full">
-                  <VideoPlayer
-                    videoSrc={selectedVideoSrc}
-                    faces={faces}
-                    fps={detectionFps}
-                    useLiveTracking={Boolean(videoId)}
-                    error={error}
-                    isSwapping={isSwapping}
-                    onSwap={videoId ? handleSwap : undefined}
-                    onBack={handleStartOver}
+          <Route
+            path="/"
+            element={
+              <>
+                {step === "gallery" && (
+                  <Gallery
+                    userVideos={userVideos}
+                    onSelect={handleOpenGalleryVideo}
+                    onUserUpload={handleUserUpload}
+                    onImageFlowClick={handleOpenImageFlow}
                   />
-                </div>
-              )}
-            </>
-          } />
+                )}
+
+                {step === "upload" && (
+                  <div className="w-full max-w-2xl rounded-[32px] border border-white/70 bg-white/70 p-6 shadow-[0_30px_90px_rgba(15,23,42,0.10)] backdrop-blur-xl">
+                    <div className="mb-6 flex items-center justify-between">
+                      <button
+                        onClick={() => setStep("gallery")}
+                        className="flex items-center gap-2 rounded-full border border-black/8 bg-white/80 px-4 py-2 text-sm font-medium text-slate-600 transition-colors hover:text-slate-950"
+                      >
+                        <ArrowLeft className="w-4 h-4" />
+                        Back to Gallery
+                      </button>
+                    </div>
+                    <VideoUploader
+                      onUpload={handleUpload}
+                      isUploading={isUploading}
+                    />
+                  </div>
+                )}
+              </>
+            }
+          />
+
+          <Route
+            path="/editor"
+            element={
+              <>
+                {step === "detecting" && (
+                  <div className="rounded-[32px] border border-white/70 bg-white/72 px-10 py-10 text-center shadow-[0_30px_90px_rgba(15,23,42,0.08)] backdrop-blur-2xl">
+                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-lime-200 bg-lime-50 text-slate-900 shadow-[0_18px_36px_rgba(157,255,116,0.18)]">
+                      <Loader2 className="h-7 w-7 animate-spin" />
+                    </div>
+                    <p className="text-lg font-semibold text-slate-900">
+                      Analyzing faces...
+                    </p>
+                    <p className="mt-2 text-sm text-slate-600">
+                      Uploading the clip, extracting frames, and preparing the
+                      review editor.
+                    </p>
+                  </div>
+                )}
+
+                {step === "processing" && (
+                  <ProcessingStatus
+                    jobId={jobId}
+                    onRetry={() => setStep("player")}
+                    onStartOver={handleStartOver}
+                  />
+                )}
+
+                {step === "player" && (
+                  <div className="fixed inset-0 z-50 h-screen w-full">
+                    <VideoPlayer
+                      videoSrc={selectedVideoSrc}
+                      faces={faces}
+                      fps={detectionFps}
+                      useLiveTracking={Boolean(videoId)}
+                      error={error}
+                      isSwapping={isSwapping}
+                      onSwap={videoId ? handleSwap : undefined}
+                      onBack={handleStartOver}
+                    />
+                  </div>
+                )}
+              </>
+            }
+          />
 
           <Route path="/image-editor" element={<ImageEditor />} />
         </Routes>

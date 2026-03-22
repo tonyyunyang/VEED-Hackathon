@@ -253,7 +253,8 @@ That is the easiest first-run local setup in this checkout.
 | `FACE_SWAPPER_BACKEND` | No, but important | `facefusion` | Selects the swap backend |
 | `FACEFUSION_DIR` | For `facefusion` | `facefusion-VEED` | Path to the checked-out FaceFusion repo |
 | `FACEFUSION_PYTHON` | Optional | current Python interpreter | Overrides the Python executable used to launch FaceFusion |
-| `FACE_SWAP_REFERENCE_IMAGE` | Strongly recommended | empty | Uses one fixed source identity image |
+| `RUNWARE_API_KEY` | Recommended | empty | Runware API key for AI face generation (img2img) |
+| `FACE_SWAP_REFERENCE_IMAGE` | Optional | empty | Uses one fixed source identity image |
 | `FACE_SWAP_REFERENCE_FACES_DIR` | Optional alternative | `server/reference_faces` | Uses a local library of source faces |
 | `FACE_SWAP_ALLOW_TARGET_THUMBNAIL_FALLBACK` | Optional | `true` | Reuses the tracked face thumbnail if no source image is available |
 | `ENABLE_LIPSYNC` | Optional | `false` | Enables fal.ai lipsync |
@@ -263,17 +264,33 @@ That is the easiest first-run local setup in this checkout.
 
 The tracker defaults in `.env.example` are already aligned with the local `movie_like_shots` pipeline and usually do not need to change.
 
-## Reference Face Inputs
+## Reference Face Resolution
 
-For meaningful swaps, provide a source identity in one of these ways.
+The backend resolves a source identity for each detected face using this priority chain. The first match wins:
 
-### Option A: one fixed source image
+1. **User-uploaded reference** — uploaded via `POST /api/upload-reference/{video_id}` (per-video, highest priority)
+2. **Global env image** — `FACE_SWAP_REFERENCE_IMAGE=/absolute/path/to/source-face.jpg`
+3. **Runware AI generation** — if `RUNWARE_API_KEY` is set, generates a neutral face via img2img from the detected face thumbnail. Accepts an optional `style_prompt` on the swap request (e.g. `"wearing sunglasses"`, `"with face paint"`)
+4. **Reference library** — deterministic pick from `server/reference_faces/`, matched by gender and age range
+5. **Thumbnail fallback** — reuses the tracked face's own thumbnail (when `FACE_SWAP_ALLOW_TARGET_THUMBNAIL_FALLBACK=true`)
 
-```dotenv
-FACE_SWAP_REFERENCE_IMAGE=/absolute/path/to/source-face.jpg
+### Uploading a per-video reference image
+
+```bash
+curl -s -F "file=@face.jpg" http://localhost:8000/api/upload-reference/<VIDEO_ID>
 ```
 
-### Option B: a reference library
+Accepts `.jpg`, `.jpeg`, `.png`, `.webp`. Overwrites any previous upload for that video.
+
+### Runware AI generation
+
+Set `RUNWARE_API_KEY` in `.env`. The backend sends the detected face thumbnail as a seed image to Runware with a prompt like:
+
+> Photorealistic front-facing passport-style portrait of a 25-year-old male person, very neutral usual face, neutral expression, plain white background, even studio lighting
+
+The optional `style_prompt` field on `/api/swap` appends user descriptions to the prompt (e.g. `"wearing sunglasses and face paint"`). Input is sanitized: max 200 characters, non-alphanumeric characters stripped, prompt injection patterns blocked.
+
+### Reference library
 
 Put images under:
 
@@ -283,28 +300,24 @@ server/reference_faces/
   female/
 ```
 
-Example:
+If filenames include age ranges like `20-29_name.jpg`, the backend picks an age-matched source image.
 
-```text
-server/reference_faces/male/20-29_actor.jpg
-server/reference_faces/female/30-39_presenter.png
-```
+### Thumbnail fallback
 
-If filenames include age ranges like `20-29_name.jpg`, the backend will try to pick an age-matched source image for the tracked face.
-
-If you provide neither a fixed image nor a reference library, the app can fall back to the tracked target thumbnail when:
+If nothing else is available, the tracked face's own thumbnail is used when:
 
 ```dotenv
 FACE_SWAP_ALLOW_TARGET_THUMBNAIL_FALLBACK=true
 ```
 
-That fallback is useful for smoke tests, but not for real identity replacement.
+Useful for smoke tests, not for real identity replacement.
 
 ## Choose A Swap Backend
 
 The API surface stays the same either way:
 
 - `POST /api/upload`
+- `POST /api/upload-reference/{video_id}`
 - `POST /api/detect-faces`
 - `POST /api/swap`
 - `GET /api/status/{job_id}`

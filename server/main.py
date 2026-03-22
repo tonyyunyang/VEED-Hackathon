@@ -2,6 +2,7 @@ import os
 import uuid
 import asyncio
 import shutil
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
@@ -84,9 +85,15 @@ swap_lock = asyncio.Lock()
 
 def _media_dir(media_id: str) -> str:
     path = os.path.join(STORAGE_DIR, media_id)
+    if not os.path.realpath(path).startswith(os.path.realpath(STORAGE_DIR)):
+        raise HTTPException(status_code=400, detail="Invalid media ID")
     if not os.path.exists(path):
         raise HTTPException(status_code=404, detail="Media not found")
     return path
+
+
+def _video_dir(video_id: str) -> str:
+    return _media_dir(video_id)
 
 
 def _find_original_media(media_dir: str) -> str | None:
@@ -180,6 +187,36 @@ async def upload_video(file: UploadFile = File(...)):
     return UploadResponse(video_id=media_id, media_id=media_id, media_type=media_type)
 
 
+@app.post("/api/upload-reference/{video_id}")
+async def upload_reference(video_id: str, file: UploadFile = File(...)):
+    """Upload a reference face image for a video.
+
+    This image will be used as the source identity for face swaps,
+    taking priority over AI generation and the reference library.
+    """
+    vdir = _video_dir(video_id)
+
+    allowed = {".jpg", ".jpeg", ".png", ".webp"}
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Invalid image format: {ext}")
+
+    ref_path = os.path.join(vdir, f"uploaded_reference{ext}")
+    # Remove any previous uploaded reference
+    for existing in os.listdir(vdir):
+        if existing.startswith("uploaded_reference"):
+            Path(os.path.join(vdir, existing)).unlink(missing_ok=True)
+
+    content = await file.read()
+    if len(content) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Reference image too large (max 10MB)")
+
+    with open(ref_path, "wb") as f:
+        f.write(content)
+
+    return {"video_id": video_id, "reference_path": f"uploaded_reference{ext}"}
+
+
 @app.post("/api/detect-faces", response_model=DetectFacesResponse)
 async def detect_faces(req: DetectFacesRequest):
     media_id = req.media_id or req.video_id
@@ -243,6 +280,7 @@ async def _run_swap_job(
     face_ids: list[str],
     start_frame: int | None = None,
     end_frame: int | None = None,
+    style_prompt: str = "",
 ):
     async with swap_lock:  # TODO do I need a lock for the //?
         try:
@@ -307,7 +345,7 @@ async def _run_swap_job(
                     total_frames=payload.get("total_frames"),
                 )
 
-            engine = face_swapper.create_swap_engine(vdir)
+            engine = face_swapper.create_swap_engine(vdir, style_prompt=style_prompt)
             await asyncio.get_running_loop().run_in_executor(
                 None,
                 face_swapper.swap_faces_pipeline,
@@ -473,6 +511,7 @@ async def swap_faces(req: SwapRequest):
             req.face_ids,
             req.start_frame,
             req.end_frame,
+            req.style_prompt or "",
         )
     )
 

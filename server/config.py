@@ -79,6 +79,8 @@ ENABLE_LIPSYNC = _env_bool("ENABLE_LIPSYNC", False)
 FAL_KEY = os.getenv("FAL_KEY", "")  # for lipsync
 LIPSYNC_RESOLUTION = os.getenv("LIPSYNC_RESOLUTION", "480p")
 
+RUNWARE_API_KEY = os.getenv("RUNWARE_API_KEY", "").strip()
+
 FACE_SWAPPER_BACKEND = _env_str("FACE_SWAPPER_BACKEND", "insightface").lower()
 ENABLE_FACE_METADATA_ENRICHMENT = _env_bool(
     "ENABLE_FACE_METADATA_ENRICHMENT",
