@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { getStatus, getDownloadUrl } from "../lib/utils/api";
 import type { StatusResponse } from "../types";
 import { Download, AlertCircle, Loader2, RotateCcw } from "lucide-react";
-import { VideoPreview } from "./VideoPreview";
+import { MediaPreview } from "./MediaPreview";
 
 interface ProcessingStatusProps {
   jobId: string;
@@ -20,6 +20,14 @@ export function ProcessingStatus({
     progress: 0,
     error: null,
   });
+
+  useEffect(() => {
+    setStatus({
+      status: "processing",
+      progress: 0,
+      error: null,
+    });
+  }, [jobId]);
 
   useEffect(() => {
     if (status.status !== "processing") return;
@@ -55,17 +63,25 @@ export function ProcessingStatus({
 
   if (status.status === "completed") {
     const downloadUrl = getDownloadUrl(jobId);
+    const downloadFilename =
+      status.output_filename ??
+      (status.media_type === "image" ? "swapped.png" : "swapped.mp4");
+    const mediaLabel = status.media_type === "image" ? "Image" : "Video";
     return (
       <div className="flex flex-col items-center gap-6 w-full max-w-lg">
-        <VideoPreview src={downloadUrl} />
+        <MediaPreview
+          src={downloadUrl}
+          mediaType={status.media_type}
+          alt={`Generated ${mediaLabel.toLowerCase()} preview`}
+        />
         <div className="flex gap-3">
           <a
             href={downloadUrl}
-            download="swapped.mp4"
+            download={downloadFilename}
             className="py-3 px-8 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
           >
             <Download className="w-4 h-4" />
-            Download Video
+            Download {mediaLabel}
           </a>
           <button
             className="py-3 px-6 border border-muted-foreground/25 text-foreground rounded-xl font-medium hover:bg-muted transition-colors inline-flex items-center gap-2"
@@ -82,16 +98,18 @@ export function ProcessingStatus({
   const pct = Math.round(status.progress * 100);
   const phaseLabel =
     status.phase === "extracting_clips"
-      ? "Preparing clip"
+      ? "Preparing selection"
       : status.phase === "swapping"
-        ? "Swapping frames"
-        : status.phase === "compositing"
-          ? "Compositing frames"
-          : status.phase === "rendering"
-            ? "Rendering video"
+        ? "Swapping faces"
+      : status.phase === "compositing"
+          ? "Compositing result"
+        : status.phase === "rendering"
+            ? status.media_type === "image"
+              ? "Rendering image"
+              : "Rendering video"
             : status.phase === "lipsync"
               ? "Applying lipsync"
-              : "Processing";
+              : "Processing media";
   const hasFrameProgress =
     typeof status.completed_frames === "number" &&
     typeof status.total_frames === "number" &&
@@ -102,7 +120,7 @@ export function ProcessingStatus({
       <div className="space-y-1 text-center">
         <p className="text-lg font-medium">{phaseLabel}</p>
         <p className="text-sm text-muted-foreground">
-          {status.message ?? "Working through the selected clip"}
+          {status.message ?? "Working through the selected media"}
         </p>
       </div>
       <div className="w-full bg-muted rounded-full h-3 overflow-hidden">

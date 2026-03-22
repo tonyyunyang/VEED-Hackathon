@@ -131,6 +131,11 @@ function App() {
     setUserVideos((prev) => [...prev, { name: file.name, url, file }]);
   };
 
+  const handleOpenImageFlow = () => {
+    setError(null);
+    navigate("/image-editor");
+  };
+
   return (
     <div className="relative flex min-h-screen w-full flex-col items-center overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(169,255,131,0.2),transparent_22%),radial-gradient(circle_at_10%_80%,_rgba(255,178,123,0.16),transparent_28%),radial-gradient(circle_at_88%_18%,_rgba(110,138,255,0.18),transparent_26%),linear-gradient(180deg,_#f9fbf6_0%,_#f3f7ff_54%,_#eef3ff_100%)] px-4 py-6 font-sans md:px-8 md:py-8">
       <div className="pointer-events-none absolute -left-20 top-12 h-72 w-72 rounded-full bg-lime-300/24 blur-3xl" />
@@ -221,7 +226,7 @@ function App() {
                   userVideos={userVideos}
                   onSelect={handleOpenGalleryVideo}
                   onUserUpload={handleUserUpload}
-                  onImageFlowClick={() => navigate("/image-editor")}
+                  onImageFlowClick={handleOpenImageFlow}
                 />
               )}
 
