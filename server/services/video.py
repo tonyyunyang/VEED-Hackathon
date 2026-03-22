@@ -1,8 +1,12 @@
 import json
+import logging
 import os
 import subprocess
+from typing import Callable
 
 import cv2
+
+logger = logging.getLogger(__name__)
 
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm", ".avi"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -51,11 +55,14 @@ def get_video_info(video_path: str) -> dict:
 def extract_frames(video_path: str, output_dir: str) -> dict:
     os.makedirs(output_dir, exist_ok=True)
     info = get_video_info(video_path)
+    logger.info("extract_frames: %s → %s (%d total frames, %.1f fps)", video_path, output_dir, info.get("total_frames", 0), info.get("fps", 0))
     cmd = [
         "ffmpeg", "-i", video_path, "-vsync", "0",
         os.path.join(output_dir, "frame_%04d.jpg"), "-y"
     ]
     subprocess.run(cmd, capture_output=True, check=True)
+    extracted = len([f for f in os.listdir(output_dir) if f.startswith("frame_") and f.endswith(".jpg")])
+    logger.info("extract_frames: done — %d frames written", extracted)
     return info
 
 
@@ -113,8 +120,19 @@ def extract_audio_segment(
 
 
 def reassemble_video(
-    frames_dir: str, audio_path: str | None, output_path: str, fps: float
+    frames_dir: str,
+    audio_path: str | None,
+    output_path: str,
+    fps: float,
+    progress_callback: Callable[[int, int], None] | None = None,
 ) -> None:
+    # Count total frames so we can report progress
+    total_frames = len([
+        f for f in os.listdir(frames_dir)
+        if f.startswith("frame_") and f.endswith(".jpg")
+    ])
+    logger.info("reassemble_video: encoding %d frames at %.1f fps → %s", total_frames, fps, output_path)
+
     cmd = [
         "ffmpeg", "-framerate", str(fps),
         "-i", os.path.join(frames_dir, "frame_%04d.jpg"),
@@ -122,8 +140,52 @@ def reassemble_video(
     ]
     if audio_path and os.path.exists(audio_path):
         cmd.extend(["-i", audio_path, "-c:a", "aac", "-shortest"])
-    cmd.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p", output_path, "-y"])
-    subprocess.run(cmd, capture_output=True, check=True)
+    cmd.extend([
+        "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-progress", "pipe:1",
+        output_path, "-y",
+    ])
+
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    last_log_frame = 0
+    output_lines: list[str] = []
+    if process.stdout is not None:
+        for line in process.stdout:
+            output_lines.append(line.rstrip())
+            if len(output_lines) > 50:
+                output_lines.pop(0)
+            # ffmpeg -progress outputs key=value lines, "frame=123"
+            line = line.strip()
+            if line.startswith("frame="):
+                try:
+                    current_frame = int(line.split("=", 1)[1])
+                except ValueError:
+                    continue
+                if progress_callback and total_frames > 0:
+                    progress_callback(current_frame, total_frames)
+                if current_frame - last_log_frame >= max(1, total_frames // 10):
+                    logger.info(
+                        "reassemble_video: encoded %d/%d frames (%.0f%%)",
+                        current_frame, total_frames,
+                        current_frame / max(1, total_frames) * 100,
+                    )
+                    last_log_frame = current_frame
+
+    return_code = process.wait()
+    if return_code != 0:
+        tail = "\n".join(output_lines[-20:])
+        logger.error("reassemble_video: ffmpeg exited with code %d: %s", return_code, tail[-500:])
+        raise subprocess.CalledProcessError(return_code, cmd, stderr=tail)
+
+    logger.info("reassemble_video: done — %d frames encoded", total_frames)
 
 
 def write_image_output(frames_dir: str, output_path: str) -> None:

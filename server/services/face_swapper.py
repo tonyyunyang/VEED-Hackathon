@@ -29,6 +29,7 @@ from config import (
     FACEFUSION_PYTHON,
     FACEFUSION_SWAP_MODEL,
     FACEFUSION_THREAD_COUNT,
+    FACEFUSION_TIMEOUT_SECONDS,
     FACE_SWAP_ALLOW_TARGET_THUMBNAIL_FALLBACK,
     FACE_SWAP_REFERENCE_FACES_DIR,
     FACE_SWAP_REFERENCE_IMAGE,
@@ -307,6 +308,7 @@ def _parse_progress(line: str) -> float | None:
 
 
 def _emit_progress(progress_callback: ProgressCallback, value: float) -> None:
+    logger.info("FaceFusion progress: %.2f%%", value * 100)
     if progress_callback:
         progress_callback(min(max(value, 0.0), 1.0))
 
@@ -378,11 +380,21 @@ def _restore_output_frames(
     output_dir: str,
 ) -> None:
     os.makedirs(output_dir, exist_ok=True)
+    fallback_count = 0
     for index, original_name in enumerate(original_names, start=1):
         generated_path = os.path.join(sequence_output_dir, f"frame_{index:04d}.jpg")
         fallback_path = os.path.join(original_clip_dir, original_name)
-        chosen_path = generated_path if os.path.exists(generated_path) else fallback_path
+        if os.path.exists(generated_path):
+            chosen_path = generated_path
+        else:
+            chosen_path = fallback_path
+            fallback_count += 1
         shutil.copy2(chosen_path, os.path.join(output_dir, original_name))
+    if fallback_count > 0:
+        logger.warning(
+            "_restore_output_frames: %d/%d frames fell back to originals (FaceFusion didn't produce them)",
+            fallback_count, len(original_names),
+        )
 
 
 class ReferenceFaceResolver:
@@ -725,6 +737,8 @@ class FaceFusionSwapEngine(FaceSwapEngine):
         if self.bypass_content_analyser:
             process_env["FACEFUSION_BYPASS_CONTENT_ANALYSER"] = "1"
 
+        timeout = FACEFUSION_TIMEOUT_SECONDS
+        logger.info("FaceFusion: starting subprocess (timeout=%ds)", timeout)
         process = subprocess.Popen(
             cmd,
             cwd=str(self.facefusion_root),
@@ -747,6 +761,7 @@ class FaceFusionSwapEngine(FaceSwapEngine):
                 _emit_progress(progress_callback, progress)
 
         return_code = process.wait()
+        logger.info("FaceFusion: process exited with code %d", return_code)
         if return_code != 0:
             tail = "\n".join(output_lines[-20:])
             job_failure_details = self._collect_job_failure_details(jobs_path)
@@ -789,9 +804,14 @@ class FaceFusionSwapEngine(FaceSwapEngine):
         try:
             original_names = _copy_clip_frames_to_sequence(clip_dir, str(input_frames_dir))
             if not original_names:
+                logger.info("[%s] swap_clip: no frames to process, skipping", face_id)
                 os.makedirs(output_dir, exist_ok=True)
                 return
 
+            logger.info(
+                "[%s] swap_clip: %d clip frames, assembling input video",
+                face_id, len(original_names),
+            )
             _emit_progress(progress_callback, 0.05)
             temp_path.mkdir(parents=True, exist_ok=True)
             jobs_path.mkdir(parents=True, exist_ok=True)
@@ -802,6 +822,7 @@ class FaceFusionSwapEngine(FaceSwapEngine):
                 str(input_video_path),
                 fps,
             )
+            logger.info("[%s] swap_clip: input video assembled, launching FaceFusion", face_id)
 
             _emit_progress(progress_callback, 0.15)
             cmd = self._build_swap_cmd(
@@ -811,6 +832,8 @@ class FaceFusionSwapEngine(FaceSwapEngine):
                 temp_path=str(temp_path),
                 jobs_path=str(jobs_path),
             )
+            logger.info("[%s] swap_clip: FaceFusion cmd: %s", face_id, " ".join(cmd))
+            t0 = time.monotonic()
             self._run_facefusion_cmd(
                 cmd,
                 jobs_path=jobs_path,
@@ -819,20 +842,45 @@ class FaceFusionSwapEngine(FaceSwapEngine):
                     0.15 + progress * 0.70,
                 ),
             )
+            elapsed = time.monotonic() - t0
+            output_size = output_video_path.stat().st_size if output_video_path.exists() else 0
+            input_size = input_video_path.stat().st_size if input_video_path.exists() else 0
+            logger.info(
+                "[%s] swap_clip: FaceFusion finished in %.1fs — input=%dKB output=%dKB",
+                face_id, elapsed, input_size // 1024, output_size // 1024,
+            )
+            if elapsed < 5.0 and len(original_names) > 10:
+                logger.warning(
+                    "[%s] swap_clip: FaceFusion finished suspiciously fast (%.1fs for %d frames) "
+                    "— it may not have processed properly",
+                    face_id, elapsed, len(original_names),
+                )
 
             if not output_video_path.exists():
                 raise RuntimeError("FaceFusion did not produce an output video")
 
+            logger.info("[%s] swap_clip: >>> starting extract_frames from FaceFusion output", face_id)
             _emit_progress(progress_callback, 0.88)
             video_service.extract_frames(str(output_video_path), str(output_frames_dir))
-            _emit_progress(progress_callback, 0.94)
+            logger.info("[%s] swap_clip: <<< extract_frames done", face_id)
 
+            output_frame_count = len([
+                f for f in os.listdir(str(output_frames_dir))
+                if f.startswith("frame_") and f.endswith(".jpg")
+            ])
+            logger.info(
+                "[%s] swap_clip: extracted %d output frames (expected %d)",
+                face_id, output_frame_count, len(original_names),
+            )
+
+            _emit_progress(progress_callback, 0.94)
             _restore_output_frames(
                 original_names=original_names,
                 sequence_output_dir=str(output_frames_dir),
                 original_clip_dir=clip_dir,
                 output_dir=output_dir,
             )
+            logger.info("[%s] swap_clip: <<< _restore_output_frames done", face_id)
             _emit_progress(progress_callback, 1.0)
         finally:
             if not FACEFUSION_KEEP_INTERMEDIATES and run_root.exists():
@@ -868,10 +916,14 @@ def swap_single_face_clip(
 
     frame_files = _sorted_frame_files(clip_dir)
     total = len(frame_files)
+    logger.info("swap_single_face_clip: %d frames to process", total)
+    swapped_count = 0
+    last_log_pct = -1
 
     for index, file_name in enumerate(frame_files):
         crop = cv2.imread(os.path.join(clip_dir, file_name))
         if crop is None:
+            logger.warning("swap_single_face_clip: could not read frame %s", file_name)
             continue
 
         with _onnx_lock:
@@ -880,11 +932,18 @@ def swap_single_face_clip(
             similarity = _cosine_similarity(detected_face.normed_embedding, target_embedding)
             if similarity >= 0.4:
                 crop = adapter.swap_face(crop, detected_face)
+                swapped_count += 1
                 break
 
         cv2.imwrite(os.path.join(output_dir, file_name), crop)
         if total > 0:
+            pct = int((index + 1) / total * 100)
+            if pct >= last_log_pct + 10:
+                logger.info("swap_single_face_clip: %d/%d frames (%.0f%%), %d swapped", index + 1, total, pct, swapped_count)
+                last_log_pct = pct
             _emit_progress(progress_callback, (index + 1) / total)
+
+    logger.info("swap_single_face_clip: done — %d/%d frames had face swapped", swapped_count, total)
 
 
 def composite_swapped_faces(
@@ -899,10 +958,13 @@ def composite_swapped_faces(
 
     all_frame_files = sorted(set(frame_names or _sorted_frame_files(frames_dir)))
     total = len(all_frame_files)
+    logger.info("composite_swapped_faces: %d frames to composite", total)
+    last_log_pct = -1
 
     for index, file_name in enumerate(all_frame_files):
         frame = cv2.imread(os.path.join(frames_dir, file_name))
         if frame is None:
+            logger.warning("composite: could not read original frame %s, skipping", file_name)
             continue
 
         for face_id, manifest in manifests.items():
@@ -911,10 +973,12 @@ def composite_swapped_faces(
 
             swapped_crop_path = os.path.join(swapped_base_dir, face_id, file_name)
             if not os.path.exists(swapped_crop_path):
+                logger.debug("composite: missing swapped crop %s for %s", file_name, face_id)
                 continue
 
             swapped_crop = cv2.imread(swapped_crop_path)
             if swapped_crop is None:
+                logger.warning("composite: could not read swapped crop %s for %s", file_name, face_id)
                 continue
 
             x1, y1, x2, y2 = manifest["crops"][file_name]
@@ -928,7 +992,13 @@ def composite_swapped_faces(
 
         cv2.imwrite(os.path.join(output_dir, file_name), frame)
         if total > 0:
+            pct = int((index + 1) / total * 100)
+            if pct >= last_log_pct + 10:
+                logger.info("composite_swapped_faces: %d/%d frames (%.0f%%)", index + 1, total, pct)
+                last_log_pct = pct
             _emit_progress(progress_callback, (index + 1) / total)
+
+    logger.info("composite_swapped_faces: done — %d frames written to %s", total, output_dir)
 
 
 def swap_faces_pipeline(
@@ -982,6 +1052,11 @@ def swap_faces_pipeline(
     total_work_units = max(1, total_swap_frames + total_output_frames)
     processed_swap_frames = 0
 
+    logger.info(
+        "swap_faces_pipeline: %d face(s), %d swap frames, %d output frames, %d total work units",
+        total_faces, total_swap_frames, total_output_frames, total_work_units,
+    )
+
     if total_swap_frames > 0:
         _emit_status(
             status_callback,
@@ -1000,6 +1075,10 @@ def swap_faces_pipeline(
             shutil.rmtree(swap_out)
         face_frame_total = len(manifests[face_id]["crops"])
         last_completed = 0
+        logger.info(
+            "swap_faces_pipeline: starting face %d/%d (%s) — %d frames",
+            face_index, total_faces, face_id, face_frame_total,
+        )
 
         def face_progress(progress: float) -> None:
             nonlocal last_completed
@@ -1031,6 +1110,18 @@ def swap_faces_pipeline(
         )
         processed_swap_frames += face_frame_total
 
+        swapped_count = len([
+            f for f in os.listdir(swap_out)
+            if f.startswith("frame_") and f.endswith(".jpg")
+        ]) if os.path.isdir(swap_out) else 0
+        logger.info(
+            "swap_faces_pipeline: face %d/%d (%s) done — %d swapped frames produced, progress %.1f%%",
+            face_index, total_faces, face_id, swapped_count,
+            processed_swap_frames / total_work_units * 100,
+        )
+
+    logger.info("swap_faces_pipeline: all faces swapped, starting compositing of %d frames", total_output_frames)
+
     if total_output_frames > 0:
         _emit_status(
             status_callback,
@@ -1057,6 +1148,7 @@ def swap_faces_pipeline(
             total_frames=total_output_frames,
         )
 
+    logger.info("swap_faces_pipeline: >>> starting composite_swapped_faces")
     composite_swapped_faces(
         frames_dir,
         output_dir,
@@ -1065,6 +1157,7 @@ def swap_faces_pipeline(
         frame_names=output_frame_names,
         progress_callback=composite_progress,
     )
+    logger.info("swap_faces_pipeline: <<< composite_swapped_faces done")
     _emit_progress(progress_callback, 1.0)
 
 

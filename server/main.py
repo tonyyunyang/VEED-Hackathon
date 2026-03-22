@@ -1,5 +1,6 @@
 import logging
 import os
+import time as _time
 import uuid
 import json
 import hashlib
@@ -98,6 +99,7 @@ app.add_middleware(
 
 jobs: dict[str, dict] = {}
 swap_lock = asyncio.Lock()
+_STALE_JOB_SECONDS = 180  # mark job failed if no update for 3 minutes
 DEMO_VIDEO_PROJECTS_DIR = Path(ROOT_DIR) / "src" / "assets" / "video-projects"
 DEMO_CACHE_METADATA_FILENAME = "demo_cache.json"
 SWAP_CACHE_DIRNAME = "swap_cache"
@@ -320,6 +322,7 @@ def _stage_frame_sequence(source_dir: str, frame_names: list[str], output_dir: s
 def _update_job(job_id: str, **fields) -> None:
     if job_id not in jobs:
         return
+    fields["_last_updated"] = _time.monotonic()
     jobs[job_id].update(fields)
 
 
@@ -574,7 +577,7 @@ async def _run_swap_job(
 
             # Phase 2: face_swapper swaps clips + composites back
             def update_progress(p):
-                _update_job(job_id, progress=0.3 + p * 0.5)
+                _update_job(job_id, progress=0.3 + p * 0.6)
 
             def update_status(payload: dict) -> None:
                 _update_job(
@@ -600,11 +603,12 @@ async def _run_swap_job(
             )
             reference_warnings = engine.get_warnings()
             if reference_warnings:
+                logger.warning("Job %s: reference warnings: %s", job_id, reference_warnings)
                 _update_job(job_id, warnings=reference_warnings)
 
             _update_job(
                 job_id,
-                progress=0.8,
+                progress=0.9,
                 phase="rendering",
                 message=(
                     f"Rendering {total_selected_frames} frame(s) to video"
@@ -620,7 +624,7 @@ async def _run_swap_job(
                     from services.lipsync import apply_lipsync
                     _update_job(
                         job_id,
-                        progress=0.85,
+                        progress=0.9,
                         phase="lipsync",
                         message="Applying lipsync",
                     )
@@ -633,21 +637,25 @@ async def _run_swap_job(
 
                     if os.path.exists(thumb_path) and os.path.exists(audio_path):
                         apply_lipsync(thumb_path, audio_path, lipsync_output)
-                        _update_job(job_id, progress=0.9)
                 except Exception as e:
-                    print(f"Lipsync failed (non-fatal): {e}")
+                    logger.warning("Lipsync failed (non-fatal): %s", e)
 
+            logger.info("Job %s: >>> preparing render frames", job_id)
             trim_active = resolved_start > 0 or resolved_end < len(_frame_files(frames_dir))
             render_frames_dir = swapped_dir
             if trim_active:
+                logger.info("Job %s: staging %d trimmed frames", job_id, len(frame_names))
+                _update_job(job_id, progress=0.91, message="Staging trimmed frames")
                 render_frames_dir = os.path.join(vdir, "render_frames")
                 _stage_frame_sequence(swapped_dir, frame_names, render_frames_dir)
+                logger.info("Job %s: staging done", job_id)
 
             output_path, output_media_type, output_filename = _output_metadata_for_media(
                 vdir,
                 faces_json,
             )
             if media_type == "image":
+                logger.info("Job %s: writing output image", job_id)
                 await asyncio.get_running_loop().run_in_executor(
                     None,
                     video.write_image_output,
@@ -657,6 +665,7 @@ async def _run_swap_job(
             else:
                 audio_path = os.path.join(vdir, "audio.aac")
                 if trim_active:
+                    logger.info("Job %s: >>> extracting trimmed audio segment", job_id)
                     original_video = _find_original_media(vdir)
                     trimmed_audio_path = os.path.join(vdir, "audio_trimmed.aac")
                     start_time = resolved_start / max(float(faces_json.get("fps", 30.0)), 1.0)
@@ -670,6 +679,24 @@ async def _run_swap_job(
                         audio_path = trimmed_audio_path
                     else:
                         audio_path = None
+                    logger.info("Job %s: <<< audio segment done (audio=%s)", job_id, audio_path)
+
+                logger.info("Job %s: >>> reassembling video from %s (%d frames)", job_id, render_frames_dir, total_selected_frames)
+                _update_job(
+                    job_id,
+                    progress=0.93,
+                    phase="rendering",
+                    message=f"Encoding final video ({total_selected_frames} frames)",
+                )
+                t0 = _time.monotonic()
+
+                def _encoding_progress(current_frame: int, total: int) -> None:
+                    pct = current_frame / max(1, total)
+                    _update_job(
+                        job_id,
+                        progress=0.93 + pct * 0.06,
+                        message=f"Encoding video: {current_frame}/{total} frames",
+                    )
 
                 await asyncio.get_running_loop().run_in_executor(
                     None,
@@ -678,8 +705,11 @@ async def _run_swap_job(
                     audio_path if audio_path and os.path.exists(audio_path) else None,
                     output_path,
                     faces_json["fps"],
+                    _encoding_progress,
                 )
+                logger.info("Job %s: <<< video encoded in %.1fs", job_id, _time.monotonic() - t0)
 
+            logger.info("Job %s: completed successfully → %s", job_id, output_path)
             _update_job(
                 job_id,
                 progress=1.0,
@@ -836,6 +866,22 @@ async def get_status(job_id: str):
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
     job = jobs[job_id]
+
+    # Detect stale processing jobs (no progress update for too long)
+    if job["status"] == "processing":
+        last_updated = job.get("_last_updated")
+        if last_updated and (_time.monotonic() - last_updated) > _STALE_JOB_SECONDS:
+            logger.error(
+                "Job %s: no progress update for %ds, marking as failed",
+                job_id, _STALE_JOB_SECONDS,
+            )
+            job["status"] = "failed"
+            job["error"] = (
+                f"Job stalled — no progress update for {_STALE_JOB_SECONDS}s. "
+                "The swap process may have crashed."
+            )
+            job["phase"] = "failed"
+
     return StatusResponse(
         status=job["status"],
         progress=job["progress"],
