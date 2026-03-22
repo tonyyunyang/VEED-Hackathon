@@ -1,12 +1,32 @@
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
+
+MediaType = Literal["video", "image"]
+
+
+class MediaRequestBase(BaseModel):
+    media_id: str | None = None
+    video_id: str | None = None
+
+    @model_validator(mode="after")
+    def _sync_media_ids(self):
+        resolved_media_id = self.media_id or self.video_id
+        if not resolved_media_id:
+            raise ValueError("media_id or video_id is required")
+        self.media_id = resolved_media_id
+        self.video_id = resolved_media_id
+        return self
 
 
 class UploadResponse(BaseModel):
     video_id: str
+    media_id: str
+    media_type: MediaType
 
 
-class DetectFacesRequest(BaseModel):
-    video_id: str
+class DetectFacesRequest(MediaRequestBase):
+    pass
 
 
 class FaceInfo(BaseModel):
@@ -20,12 +40,16 @@ class FaceInfo(BaseModel):
 
 class DetectFacesResponse(BaseModel):
     video_id: str
+    media_id: str
+    media_type: MediaType
     fps: float
+    total_frames: int
+    width: int | None = None
+    height: int | None = None
     faces: list[FaceInfo]
 
 
-class SwapRequest(BaseModel):
-    video_id: str
+class SwapRequest(MediaRequestBase):
     face_ids: list[str]
     start_frame: int | None = None
     end_frame: int | None = None
@@ -33,6 +57,8 @@ class SwapRequest(BaseModel):
 
 class SwapResponse(BaseModel):
     job_id: str
+    media_id: str | None = None
+    media_type: MediaType | None = None
 
 
 class StatusResponse(BaseModel):
@@ -43,3 +69,6 @@ class StatusResponse(BaseModel):
     message: str | None = None
     completed_frames: int | None = None
     total_frames: int | None = None
+    media_id: str | None = None
+    media_type: MediaType | None = None
+    output_filename: str | None = None

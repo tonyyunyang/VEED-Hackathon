@@ -11,13 +11,22 @@ from models.schemas import (
 
 
 def test_upload_response():
-    r = UploadResponse(video_id="abc123")
+    r = UploadResponse(video_id="abc123", media_id="abc123", media_type="video")
     assert r.video_id == "abc123"
+    assert r.media_id == "abc123"
+    assert r.media_type == "video"
 
 
-def test_detect_faces_request():
+def test_detect_faces_request_accepts_video_id():
     r = DetectFacesRequest(video_id="abc123")
     assert r.video_id == "abc123"
+    assert r.media_id == "abc123"
+
+
+def test_detect_faces_request_accepts_media_id():
+    r = DetectFacesRequest(media_id="media123")
+    assert r.video_id == "media123"
+    assert r.media_id == "media123"
 
 
 def test_face_info():
@@ -37,7 +46,12 @@ def test_face_info():
 def test_detect_faces_response():
     r = DetectFacesResponse(
         video_id="abc",
+        media_id="abc",
+        media_type="image",
         fps=24.0,
+        total_frames=1,
+        width=640,
+        height=480,
         faces=[
             FaceInfo(
                 face_id="face_0",
@@ -50,25 +64,42 @@ def test_detect_faces_response():
     )
     assert len(r.faces) == 1
     assert r.fps == 24.0
+    assert r.media_type == "image"
+    assert r.total_frames == 1
     assert r.faces[0].gender == "female"
 
 
-def test_swap_request():
+def test_swap_request_accepts_video_id():
     r = SwapRequest(video_id="abc", face_ids=["face_0", "face_1"])
+    assert r.media_id == "abc"
     assert len(r.face_ids) == 2
 
 
+def test_swap_request_accepts_media_id():
+    r = SwapRequest(media_id="asset_1", face_ids=["face_0"])
+    assert r.video_id == "asset_1"
+    assert r.media_id == "asset_1"
+
+
 def test_swap_response():
-    r = SwapResponse(job_id="job_123")
+    r = SwapResponse(job_id="job_123", media_id="abc", media_type="image")
     assert r.job_id == "job_123"
+    assert r.media_type == "image"
 
 
 def test_status_response_processing():
-    r = StatusResponse(status="processing", progress=0.5)
+    r = StatusResponse(status="processing", progress=0.5, media_type="video")
     assert r.error is None
     assert r.progress == 0.5
+    assert r.media_type == "video"
 
 
 def test_status_response_failed():
-    r = StatusResponse(status="failed", progress=0.0, error="Something broke")
+    r = StatusResponse(
+        status="failed",
+        progress=0.0,
+        error="Something broke",
+        output_filename="swapped.png",
+    )
     assert r.error == "Something broke"
+    assert r.output_filename == "swapped.png"

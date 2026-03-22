@@ -2,6 +2,7 @@ import type {
   DetectFacesResponse,
   StatusResponse,
   SwapResponse,
+  UploadMediaResponse,
 } from "../../types";
 
 export function getBackendUrl(): string {
@@ -15,30 +16,40 @@ export function getBackendUrl(): string {
   return "";
 }
 
-export async function uploadVideo(file: File): Promise<string> {
+export async function uploadMedia(file: File): Promise<UploadMediaResponse> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch("/api/upload", { method: "POST", body: form });
   if (!res.ok) throw new Error(`Upload failed: ${res.statusText}`);
-  const data = await res.json();
-  return data.video_id;
+  return res.json();
 }
 
-export async function detectFaces(
-  videoId: string
+export async function uploadVideo(file: File): Promise<string> {
+  const data = await uploadMedia(file);
+  return data.media_id;
+}
+
+export async function analyzeMediaFaces(
+  mediaId: string
 ): Promise<DetectFacesResponse> {
   const res = await fetch("/api/detect-faces", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ video_id: videoId }),
+    body: JSON.stringify({ media_id: mediaId }),
     signal: AbortSignal.timeout(120_000),
   });
   if (!res.ok) throw new Error(`Detection failed: ${res.statusText}`);
   return res.json();
 }
 
-export async function startSwap(
-  videoId: string,
+export async function detectFaces(
+  mediaId: string
+): Promise<DetectFacesResponse> {
+  return analyzeMediaFaces(mediaId);
+}
+
+export async function startFaceSwapJob(
+  mediaId: string,
   faceIds: string[],
   options?: {
     startFrame?: number;
@@ -49,7 +60,7 @@ export async function startSwap(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      video_id: videoId,
+      media_id: mediaId,
       face_ids: faceIds,
       start_frame: options?.startFrame,
       end_frame: options?.endFrame,
@@ -60,12 +71,31 @@ export async function startSwap(
   return data.job_id;
 }
 
-export async function getStatus(jobId: string): Promise<StatusResponse> {
+export async function startSwap(
+  mediaId: string,
+  faceIds: string[],
+  options?: {
+    startFrame?: number;
+    endFrame?: number;
+  },
+): Promise<string> {
+  return startFaceSwapJob(mediaId, faceIds, options);
+}
+
+export async function getJobStatus(jobId: string): Promise<StatusResponse> {
   const res = await fetch(`/api/status/${jobId}`);
   if (!res.ok) throw new Error(`Status check failed: ${res.statusText}`);
   return res.json();
 }
 
-export function getDownloadUrl(jobId: string): string {
+export async function getStatus(jobId: string): Promise<StatusResponse> {
+  return getJobStatus(jobId);
+}
+
+export function getJobDownloadUrl(jobId: string): string {
   return `/api/download/${jobId}`;
+}
+
+export function getDownloadUrl(jobId: string): string {
+  return getJobDownloadUrl(jobId);
 }

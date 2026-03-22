@@ -82,18 +82,38 @@ jobs: dict[str, dict] = {}
 swap_lock = asyncio.Lock()
 
 
-def _video_dir(video_id: str) -> str:
-    path = os.path.join(STORAGE_DIR, video_id)
+def _media_dir(media_id: str) -> str:
+    path = os.path.join(STORAGE_DIR, media_id)
     if not os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Video not found")
+        raise HTTPException(status_code=404, detail="Media not found")
     return path
 
 
-def _find_original_video(video_dir: str) -> str | None:
-    for file_name in os.listdir(video_dir):
+def _find_original_media(media_dir: str) -> str | None:
+    for file_name in os.listdir(media_dir):
         if file_name.startswith("original"):
-            return os.path.join(video_dir, file_name)
+            return os.path.join(media_dir, file_name)
     return None
+
+
+def _output_metadata_for_media(media_dir: str, faces_json: dict) -> tuple[str, str, str]:
+    media_type = str(faces_json.get("media_type") or "video").lower()
+    if media_type == "image":
+        original_media = _find_original_media(media_dir)
+        output_extension = str(
+            faces_json.get("output_extension")
+            or video.output_image_extension_for_path(original_media or "output.png")
+        )
+        output_path = os.path.join(media_dir, f"output{output_extension}")
+        if output_extension in {".jpg", ".jpeg"}:
+            mime_type = "image/jpeg"
+        elif output_extension == ".webp":
+            mime_type = "image/webp"
+        else:
+            mime_type = "image/png"
+        return output_path, mime_type, f"swapped{output_extension}"
+
+    return os.path.join(media_dir, "output.mp4"), "video/mp4", "swapped.mp4"
 
 
 def _frame_files(frames_dir: str) -> list[str]:
@@ -138,49 +158,60 @@ def _update_job(job_id: str, **fields) -> None:
 
 @app.post("/api/upload", response_model=UploadResponse)
 async def upload_video(file: UploadFile = File(...)):
-    allowed = {".mp4", ".mov", ".webm", ".avi"}
     ext = os.path.splitext(file.filename or "")[1].lower()
+    allowed = video.VIDEO_EXTENSIONS | video.IMAGE_EXTENSIONS
     if ext not in allowed:
-        raise HTTPException(status_code=400, detail=f"Invalid video format: {ext}")
+        raise HTTPException(status_code=400, detail=f"Invalid media format: {ext}")
 
-    video_id = str(uuid.uuid4())[:8]
-    video_dir = os.path.join(STORAGE_DIR, video_id)
-    os.makedirs(video_dir, exist_ok=True)
+    try:
+        media_type = video.media_type_for_path(file.filename or "")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    video_path = os.path.join(video_dir, f"original{ext}")
-    with open(video_path, "wb") as f:
+    media_id = str(uuid.uuid4())[:8]
+    media_dir = os.path.join(STORAGE_DIR, media_id)
+    os.makedirs(media_dir, exist_ok=True)
+
+    media_path = os.path.join(media_dir, f"original{ext}")
+    with open(media_path, "wb") as f:
         content = await file.read()
         f.write(content)
 
-    return UploadResponse(video_id=video_id)
+    return UploadResponse(video_id=media_id, media_id=media_id, media_type=media_type)
 
 
 @app.post("/api/detect-faces", response_model=DetectFacesResponse)
 async def detect_faces(req: DetectFacesRequest):
-    vdir = _video_dir(req.video_id)
+    media_id = req.media_id or req.video_id
+    vdir = _media_dir(media_id)
 
-    original = None
-    for f in os.listdir(vdir):
-        if f.startswith("original"):
-            original = os.path.join(vdir, f)
-            break
+    original = _find_original_media(vdir)
     if not original:
-        raise HTTPException(status_code=404, detail="Original video not found")
+        raise HTTPException(status_code=404, detail="Original media not found")
 
     frames_dir = os.path.join(vdir, "frames")
+    media_type = video.media_type_for_path(original)
 
     loop = asyncio.get_running_loop()
-    video_info = await loop.run_in_executor(
-        None, video.extract_frames, original, frames_dir
-    )
+    if media_type == "image":
+        media_info = await loop.run_in_executor(
+            None, video.stage_image_as_frames, original, frames_dir
+        )
+        faces_data = await loop.run_in_executor(
+            None, face_tracker.detect_faces_in_image, original, vdir
+        )
+    else:
+        media_info = await loop.run_in_executor(
+            None, video.extract_frames, original, frames_dir
+        )
 
-    audio_path = os.path.join(vdir, "audio.aac")
-    await loop.run_in_executor(None, video.extract_audio, original, audio_path)
+        audio_path = os.path.join(vdir, "audio.aac")
+        await loop.run_in_executor(None, video.extract_audio, original, audio_path)
 
-    faces_data = await loop.run_in_executor(
-        None, face_tracker.detect_and_cluster, frames_dir, vdir, FRAME_SUBSAMPLE
-    )
-    face_tracker.save_faces_json(faces_data, video_info, os.path.join(vdir, "faces.json"))
+        faces_data = await loop.run_in_executor(
+            None, face_tracker.detect_and_cluster, frames_dir, vdir, FRAME_SUBSAMPLE
+        )
+    face_tracker.save_faces_json(faces_data, media_info, os.path.join(vdir, "faces.json"))
 
     faces_list = [
         FaceInfo(
@@ -195,25 +226,31 @@ async def detect_faces(req: DetectFacesRequest):
     ]
 
     return DetectFacesResponse(
-        video_id=req.video_id,
-        fps=video_info["fps"],
+        video_id=media_id,
+        media_id=media_id,
+        media_type=media_type,
+        fps=media_info["fps"],
+        total_frames=media_info["total_frames"],
+        width=media_info.get("width"),
+        height=media_info.get("height"),
         faces=faces_list,
     )
 
 
 async def _run_swap_job(
     job_id: str,
-    video_id: str,
+    media_id: str,
     face_ids: list[str],
     start_frame: int | None = None,
     end_frame: int | None = None,
 ):
     async with swap_lock:  # TODO do I need a lock for the //?
         try:
-            vdir = os.path.join(STORAGE_DIR, video_id)
+            vdir = os.path.join(STORAGE_DIR, media_id)
             frames_dir = os.path.join(vdir, "frames")
             swapped_dir = os.path.join(vdir, "swapped")
             faces_json = face_tracker.load_faces_json(os.path.join(vdir, "faces.json"))
+            media_type = str(faces_json.get("media_type") or "video").lower()
             frame_names, resolved_start, resolved_end = _resolve_frame_window(
                 frames_dir,
                 start_frame,
@@ -288,12 +325,16 @@ async def _run_swap_job(
                 job_id,
                 progress=0.8,
                 phase="rendering",
-                message=f"Rendering {total_selected_frames} frame(s) to video",
+                message=(
+                    f"Rendering {total_selected_frames} frame(s) to video"
+                    if media_type == "video"
+                    else "Rendering swapped image"
+                ),
                 completed_frames=total_selected_frames,
                 total_frames=total_selected_frames,
             )
 
-            if ENABLE_LIPSYNC:  # TODO: Non working for now, placeholder
+            if ENABLE_LIPSYNC and media_type == "video":  # TODO: Non working for now, placeholder
                 try:
                     from services.lipsync import apply_lipsync
                     _update_job(
@@ -321,31 +362,42 @@ async def _run_swap_job(
                 render_frames_dir = os.path.join(vdir, "render_frames")
                 _stage_frame_sequence(swapped_dir, frame_names, render_frames_dir)
 
-            audio_path = os.path.join(vdir, "audio.aac")
-            if trim_active:
-                original_video = _find_original_video(vdir)
-                trimmed_audio_path = os.path.join(vdir, "audio_trimmed.aac")
-                start_time = resolved_start / max(float(faces_json.get("fps", 30.0)), 1.0)
-                duration = total_selected_frames / max(float(faces_json.get("fps", 30.0)), 1.0)
-                if original_video and video.extract_audio_segment(
-                    original_video,
-                    trimmed_audio_path,
-                    start_time,
-                    duration,
-                ):
-                    audio_path = trimmed_audio_path
-                else:
-                    audio_path = None
-
-            output_path = os.path.join(vdir, "output.mp4")
-            await asyncio.get_running_loop().run_in_executor(
-                None,
-                video.reassemble_video,
-                render_frames_dir,
-                audio_path if audio_path and os.path.exists(audio_path) else None,
-                output_path,
-                faces_json["fps"],
+            output_path, output_media_type, output_filename = _output_metadata_for_media(
+                vdir,
+                faces_json,
             )
+            if media_type == "image":
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    video.write_image_output,
+                    render_frames_dir,
+                    output_path,
+                )
+            else:
+                audio_path = os.path.join(vdir, "audio.aac")
+                if trim_active:
+                    original_video = _find_original_media(vdir)
+                    trimmed_audio_path = os.path.join(vdir, "audio_trimmed.aac")
+                    start_time = resolved_start / max(float(faces_json.get("fps", 30.0)), 1.0)
+                    duration = total_selected_frames / max(float(faces_json.get("fps", 30.0)), 1.0)
+                    if original_video and video.extract_audio_segment(
+                        original_video,
+                        trimmed_audio_path,
+                        start_time,
+                        duration,
+                    ):
+                        audio_path = trimmed_audio_path
+                    else:
+                        audio_path = None
+
+                await asyncio.get_running_loop().run_in_executor(
+                    None,
+                    video.reassemble_video,
+                    render_frames_dir,
+                    audio_path if audio_path and os.path.exists(audio_path) else None,
+                    output_path,
+                    faces_json["fps"],
+                )
 
             _update_job(
                 job_id,
@@ -355,6 +407,9 @@ async def _run_swap_job(
                 message="Swap complete",
                 completed_frames=total_selected_frames,
                 total_frames=total_selected_frames,
+                output_filename=output_filename,
+                output_path=output_path,
+                output_media_type=output_media_type,
             )
 
         except Exception as e:
@@ -363,16 +418,25 @@ async def _run_swap_job(
 
 @app.post("/api/swap", response_model=SwapResponse)
 async def swap_faces(req: SwapRequest):
-    vdir = _video_dir(req.video_id)
+    media_id = req.media_id or req.video_id
+    vdir = _media_dir(media_id)
 
     faces_path = os.path.join(vdir, "faces.json")
     if not os.path.exists(faces_path):
         raise HTTPException(status_code=400, detail="Run detect-faces first")
 
     faces_json = face_tracker.load_faces_json(faces_path)
+    media_type = str(faces_json.get("media_type") or "video").lower()
     for fid in req.face_ids:
         if fid not in faces_json["faces"]:
             raise HTTPException(status_code=400, detail=f"Unknown face ID: {fid}")
+    if media_type == "image" and (
+        req.start_frame is not None or req.end_frame is not None
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Frame trimming is only supported for video media",
+        )
     if req.start_frame is not None and req.start_frame < 0:
         raise HTTPException(status_code=400, detail="start_frame must be >= 0")
     if req.end_frame is not None and req.end_frame <= 0:
@@ -392,24 +456,27 @@ async def swap_faces(req: SwapRequest):
         "status": "processing",
         "progress": 0.0,
         "error": None,
-        "video_id": req.video_id,
+        "video_id": media_id,
+        "media_id": media_id,
+        "media_type": media_type,
         "phase": "queued",
         "message": "Waiting to start",
         "completed_frames": 0,
         "total_frames": None,
+        "output_filename": None,
     }
 
     asyncio.create_task(
         _run_swap_job(
             job_id,
-            req.video_id,
+            media_id,
             req.face_ids,
             req.start_frame,
             req.end_frame,
         )
     )
 
-    return SwapResponse(job_id=job_id)
+    return SwapResponse(job_id=job_id, media_id=media_id, media_type=media_type)
 
 
 @app.get("/api/status/{job_id}", response_model=StatusResponse)
@@ -425,6 +492,9 @@ async def get_status(job_id: str):
         message=job.get("message"),
         completed_frames=job.get("completed_frames"),
         total_frames=job.get("total_frames"),
+        media_id=job.get("media_id") or job.get("video_id"),
+        media_type=job.get("media_type"),
+        output_filename=job.get("output_filename"),
     )
 
 
@@ -436,11 +506,23 @@ async def download_video(job_id: str):
     if job["status"] != "completed":
         raise HTTPException(status_code=400, detail="Job not completed")
 
-    output_path = os.path.join(STORAGE_DIR, job["video_id"], "output.mp4")
+    output_path = job.get("output_path")
+    if not output_path:
+        faces_path = os.path.join(STORAGE_DIR, job["video_id"], "faces.json")
+        if not os.path.exists(faces_path):
+            raise HTTPException(status_code=404, detail="Output metadata not found")
+        faces_json = face_tracker.load_faces_json(faces_path)
+        output_path, output_media_type, output_filename = _output_metadata_for_media(
+            os.path.join(STORAGE_DIR, job["video_id"]),
+            faces_json,
+        )
+    else:
+        output_media_type = job.get("output_media_type") or "video/mp4"
+        output_filename = job.get("output_filename") or "swapped.mp4"
     if not os.path.exists(output_path):
         raise HTTPException(status_code=404, detail="Output file not found")
 
-    return FileResponse(output_path, media_type="video/mp4", filename="swapped.mp4")
+    return FileResponse(output_path, media_type=output_media_type, filename=output_filename)
 
 
 if __name__ == "__main__":
