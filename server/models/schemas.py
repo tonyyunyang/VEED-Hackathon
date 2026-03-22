@@ -29,6 +29,11 @@ class SwapRequest(BaseModel):
     face_ids: list[str]
     start_frame: int | None = None
     end_frame: int | None = None
+    style_prompt: str | None = Field(
+        default=None,
+        description="Optional style description for AI-generated faces "
+        "(e.g. 'wearing sunglasses', 'with face paint')",
+    )
 
 
 class SwapResponse(BaseModel):

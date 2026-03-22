@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import base64
 import hashlib
+import logging
 import os
 import re
 import shutil
@@ -29,6 +31,7 @@ from config import (
     FACE_SWAP_REFERENCE_FACES_DIR,
     FACE_SWAP_REFERENCE_IMAGE,
     FACE_SWAPPER_BACKEND,
+    RUNWARE_API_KEY,
 )
 from services import video as video_service
 
@@ -42,6 +45,147 @@ _onnx_lock = threading.Lock()
 ProgressCallback = Callable[[float], None] | None
 StatusCallback = Callable[[dict[str, Any]], None] | None
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+
+logger = logging.getLogger(__name__)
+
+
+_STYLE_PROMPT_MAX_LENGTH = 200
+_STYLE_PROMPT_BLOCKED_PATTERNS = re.compile(
+    r"(ignore\s+(previous|above|all)|system\s*prompt|you\s+are\s+now|"
+    r"disregard|forget\s+(everything|instructions)|override|<\s*script|"
+    r"javascript\s*:|data\s*:)",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_style_prompt(raw: str) -> str:
+    """Sanitize user-provided style additions for prompt injection safety."""
+    text = raw.strip()
+    if not text:
+        return ""
+    text = re.sub(r"[^\w\s,.\-'/()&]+", "", text)
+    if _STYLE_PROMPT_BLOCKED_PATTERNS.search(text):
+        logger.warning("Blocked suspicious style prompt: %s", text[:80])
+        return ""
+    return text[:_STYLE_PROMPT_MAX_LENGTH]
+
+
+def _build_runware_prompt(age: int, gender: str, style_prompt: str = "") -> str:
+    age_desc = f"{age}-year-old " if age > 0 else ""
+    gender_desc = f"{gender} " if gender else ""
+    base = (
+        f"Photorealistic front-facing passport-style portrait of a {age_desc}"
+        f"{gender_desc}person, very neutral usual face, "
+        "neutral expression, plain white background, even studio lighting"
+    )
+    sanitized = _sanitize_style_prompt(style_prompt)
+    if sanitized:
+        base += f", {sanitized}"
+    return base
+
+
+def _generate_face_runware(
+    thumbnail_path: str,
+    output_path: str,
+    age: int,
+    gender: str,
+    style_prompt: str = "",
+) -> str | None:
+    """Generate a neutral replacement face via Runware img2img.
+
+    Uses the detected face thumbnail as seed image and steers the generation
+    toward a neutral, demographically-consistent face.  Calls the Runware
+    WebSocket API directly (no SDK needed).  Returns the path to the
+    generated image on success, or ``None`` on failure.
+    """
+    if not RUNWARE_API_KEY:
+        return None
+
+    try:
+        import json
+
+        import httpx
+        import websockets.sync.client as ws_sync
+
+        RUNWARE_WS_URL = "wss://ws-api.runware.ai/v1"
+
+        # Encode thumbnail as data URI
+        with open(thumbnail_path, "rb") as f:
+            seed_b64 = base64.b64encode(f.read()).decode("utf-8")
+        ext = Path(thumbnail_path).suffix.lower().lstrip(".")
+        mime = {"jpg": "jpeg", "jpeg": "jpeg", "png": "png", "webp": "webp"}.get(ext, "jpeg")
+        seed_data_uri = f"data:image/{mime};base64,{seed_b64}"
+
+        prompt = _build_runware_prompt(age, gender, style_prompt)
+        logger.info("Runware prompt: %s", prompt)
+
+        task_uuid = uuid.uuid4().hex
+
+        with ws_sync.connect(RUNWARE_WS_URL, max_size=None, open_timeout=15) as conn:
+            # Authenticate
+            conn.send(json.dumps([{"taskType": "authentication", "apiKey": RUNWARE_API_KEY}]))
+            auth_resp = json.loads(conn.recv(timeout=15))
+            if isinstance(auth_resp, dict) and auth_resp.get("error"):
+                logger.warning("Runware auth failed: %s", auth_resp)
+                return None
+            if isinstance(auth_resp, list):
+                for item in auth_resp:
+                    if isinstance(item, dict) and item.get("error"):
+                        logger.warning("Runware auth failed: %s", item)
+                        return None
+
+            # Send image inference request
+            conn.send(json.dumps([{
+                "taskType": "imageInference",
+                "taskUUID": task_uuid,
+                "model": "runware:101@1",
+                "positivePrompt": prompt,
+                "seedImage": seed_data_uri,
+                "strength": 0.55,
+                "width": 512,
+                "height": 512,
+                "steps": 30,
+                "numberResults": 1,
+                "outputType": "URL",
+                "outputFormat": "JPG",
+            }]))
+
+            # Wait for result (poll messages until we get our task back)
+            image_url = None
+            for _ in range(60):  # up to ~60 recv calls
+                raw = conn.recv(timeout=60)
+                msg = json.loads(raw)
+                data_list = msg.get("data") if isinstance(msg, dict) else msg
+                if not isinstance(data_list, list):
+                    continue
+                for item in data_list:
+                    if item.get("taskUUID") == task_uuid and item.get("imageURL"):
+                        image_url = item["imageURL"]
+                        break
+                    if item.get("taskUUID") == task_uuid and item.get("error"):
+                        logger.warning("Runware task error: %s", item)
+                        return None
+                if image_url:
+                    break
+
+        if not image_url:
+            logger.warning("Runware: no image URL received")
+            return None
+
+        # Download the generated image
+        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+        with httpx.Client() as client:
+            resp = client.get(image_url)
+            resp.raise_for_status()
+            with open(output_path, "wb") as out:
+                out.write(resp.content)
+
+        logger.info("Runware generated face saved to %s", output_path)
+        return output_path
+
+    except Exception:
+        logger.warning("Runware face generation failed, falling back", exc_info=True)
+        return None
 
 
 def _get_app() -> FaceAnalysis:
@@ -167,24 +311,50 @@ class ReferenceFaceResolver:
         reference_image: str = FACE_SWAP_REFERENCE_IMAGE,
         reference_faces_dir: str = FACE_SWAP_REFERENCE_FACES_DIR,
         allow_target_thumbnail_fallback: bool = FACE_SWAP_ALLOW_TARGET_THUMBNAIL_FALLBACK,
+        style_prompt: str = "",
     ):
         self.reference_image = reference_image
         self.reference_faces_dir = reference_faces_dir
         self.allow_target_thumbnail_fallback = allow_target_thumbnail_fallback
+        self.style_prompt = style_prompt
 
     def resolve(self, video_dir: str, face_id: str, face_data: dict) -> str | None:
+        # 1. User-uploaded reference image for this video (highest priority)
+        uploaded_candidates = sorted(
+            name for name in os.listdir(video_dir) if name.startswith("uploaded_reference")
+        )
+        if uploaded_candidates:
+            return str(Path(video_dir) / uploaded_candidates[0])
+
+        # 2. Global reference image from env
         direct_path = Path(self.reference_image) if self.reference_image else None
         if direct_path and direct_path.is_file():
             return str(direct_path)
 
         age = int(face_data.get("age") or 0)
         gender = str(face_data.get("gender") or "").strip().lower()
+
+        # 3. Runware AI face generation (img2img from the detected thumbnail)
+        thumbnail_name = face_data.get("thumbnail_path")
+        if RUNWARE_API_KEY and thumbnail_name:
+            thumbnail_path = Path(video_dir) / thumbnail_name
+            if thumbnail_path.is_file():
+                output_path = str(
+                    Path(video_dir) / f".runware_generated_{face_id}.jpg"
+                )
+                generated = _generate_face_runware(
+                    str(thumbnail_path), output_path, age, gender,
+                    self.style_prompt,
+                )
+                if generated:
+                    return generated
+
+        # 4. Fallback: pick from local reference library
         candidates = self._candidates_for_face(face_id, gender, age)
         if candidates:
             return str(candidates)
 
         if self.allow_target_thumbnail_fallback:
-            thumbnail_name = face_data.get("thumbnail_path")
             if thumbnail_name:
                 thumbnail_path = Path(video_dir) / thumbnail_name
                 if thumbnail_path.is_file():
@@ -523,7 +693,10 @@ class FaceFusionSwapEngine(FaceSwapEngine):
 def create_swap_engine(
     video_dir: str,
     reference_resolver: ReferenceFaceResolver | None = None,
+    style_prompt: str = "",
 ) -> FaceSwapEngine:
+    if reference_resolver is None:
+        reference_resolver = ReferenceFaceResolver(style_prompt=style_prompt)
     backend = FACE_SWAPPER_BACKEND.strip().lower()
     if backend == "insightface":
         return InsightFaceSwapEngine(video_dir, reference_resolver)
