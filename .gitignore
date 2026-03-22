@@ -34,7 +34,6 @@ server/test_swap_output
 .uv-cache/
 .tmp-npm-cache/
 .tmp-tracker-smoke/
-facefusion-VEED/
 
 *.af
 # Temporary Scratch Files
