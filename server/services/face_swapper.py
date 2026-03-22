@@ -340,17 +340,20 @@ class ReferenceFaceResolver:
             name for name in os.listdir(video_dir) if name.startswith("uploaded_reference")
         )
         if uploaded_candidates:
-            return str(Path(video_dir) / uploaded_candidates[0])
+            result = str(Path(video_dir) / uploaded_candidates[0])
+            logger.info("[%s] Reference source: user-uploaded image → %s", face_id, result)
+            return result
 
         # 2. Global reference image from env
         direct_path = Path(self.reference_image) if self.reference_image else None
         if direct_path and direct_path.is_file():
+            logger.info("[%s] Reference source: global env image → %s", face_id, direct_path)
             return str(direct_path)
 
         age = int(face_data.get("age") or 0)
         gender = str(face_data.get("gender") or "").strip().lower()
 
-        # 3. Runware AI face generation (img2img from the detected thumbnail)
+        # 3. Runware AI face generation (text-to-image from demographics)
         thumbnail_name = face_data.get("thumbnail_path")
         if RUNWARE_API_KEY and thumbnail_name:
             thumbnail_path = Path(video_dir) / thumbnail_name
@@ -363,18 +366,23 @@ class ReferenceFaceResolver:
                     self.style_prompt,
                 )
                 if generated:
+                    logger.info("[%s] Reference source: Runware AI generated → %s", face_id, generated)
                     return generated
 
         # 4. Fallback: pick from local reference library
         candidates = self._candidates_for_face(face_id, gender, age)
         if candidates:
+            logger.info("[%s] Reference source: local library → %s", face_id, candidates)
             return str(candidates)
 
         if self.allow_target_thumbnail_fallback:
             if thumbnail_name:
                 thumbnail_path = Path(video_dir) / thumbnail_name
                 if thumbnail_path.is_file():
+                    logger.info("[%s] Reference source: thumbnail fallback → %s", face_id, thumbnail_path)
                     return str(thumbnail_path)
+
+        logger.warning("[%s] Reference source: none found", face_id)
         return None
 
     def _candidates_for_face(self, face_id: str, gender: str, age: int) -> Path | None:
