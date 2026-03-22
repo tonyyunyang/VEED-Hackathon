@@ -1,190 +1,625 @@
+`git clone --recurse-submodules https://github.com/tonyyunyang/VEED-Hackathon.git && cd VEED-Hackathon`
+
 # VEED Face Swap
 
-A video editing tool that detects faces in short clips (~10s), lets users select which faces to replace, swaps them with AI-generated faces matched by age/gender, and optionally applies lipsync via VEED Fabric 1.0. Original audio is preserved.
+VEED Face Swap is a local full-stack app for:
 
-## How It Works
+- uploading a short video
+- detecting and clustering faces across frames
+- selecting tracked faces to replace
+- running a face-swap job
+- optionally applying lipsync
+- downloading the rendered result
 
-1. **Upload** a short video clip
-2. **Detect** — system identifies and clusters all unique faces across frames
-3. **Select** one or more faces to swap
-4. **Swap** — system replaces selected faces (with optional lipsync)
-5. **Download** the modified video
+This README is written for other developers who need to deploy the project locally without conda. The supported local workflow documented here is:
 
-## Architecture
+- `npm` for the frontend
+- `uv` for the backend environment and the `npm run server` wrapper
+- no `conda`
 
-| Layer          | Technology                                                   |
-|----------------|--------------------------------------------------------------|
-| Frontend       | React 19 + TypeScript + Vite + Tailwind 4 + shadcn           |
-| Backend        | Python, FastAPI + Uvicorn                                    |
-| Face Tracking  | `movie-like-shots` via `face-detect-track` submodule         |
-| Face Detection | InsightFace (recognition, age/gender enrichment)             |
-| Face Swap      | Pluggable backend (`insightface` or repo-local `facefusion-VEED`) |
-| Lipsync        | VEED Fabric 1.0 via fal.ai (optional, config-driven)         |
-| Video I/O      | FFmpeg                                                       |
+## Quick Start
 
-## Setup
+If you want the shortest path to a working local setup:
 
-### Clone
+1. Clone the repo with submodules:
 
-Clone recursively so Git also pulls:
-- the `face-detect-track` submodule
-- the nested tracker/detector repos inside it
+   ```bash
+   git clone --recurse-submodules https://github.com/tonyyunyang/VEED-Hackathon.git
+   cd VEED-Hackathon
+   git submodule sync --recursive
+   git submodule update --init --recursive
+   ```
+
+2. Install system prerequisites:
+
+   - Node.js `20.19+` or `22.12+`
+   - npm `10+`
+   - Python `3.11` or `3.12`
+   - `uv`
+   - `ffmpeg`
+   - `ffprobe`
+   - `curl`
+
+3. Install backend dependencies:
+
+   ```bash
+   UV_CACHE_DIR=.uv-cache uv sync --directory server --locked --all-groups
+   ```
+
+4. Install frontend dependencies:
+
+   ```bash
+   npm install
+   ```
+
+5. Create your local env file:
+
+   ```bash
+   cp .env.example .env
+   ```
+
+6. Add a reference identity source to `.env`:
+
+   ```dotenv
+   FACE_SWAP_REFERENCE_IMAGE=/absolute/path/to/source-face.jpg
+   ```
+
+   Or populate:
+
+   ```text
+   server/reference_faces/
+   ```
+
+7. Start the backend:
+
+   ```bash
+   npm run server
+   ```
+
+8. Start the frontend in a second terminal:
+
+   ```bash
+   npm run dev -- --host 127.0.0.1
+   ```
+
+9. Open the app:
+
+   - frontend: `http://127.0.0.1:5173`
+   - backend: `http://127.0.0.1:8000`
+   - backend docs: `http://127.0.0.1:8000/docs`
+
+## Clone And Submodules
+
+The app depends on Git submodules. Do not skip them.
+
+Top-level submodules:
+
+- `face-detect-track`
+- `facefusion-VEED`
+
+Nested submodules inside `face-detect-track`:
+
+- `BoT-FaceSORT-VEED`
+- `insightface-VEED`
+
+Because the root `.gitmodules` file uses HTTPS URLs, a standard recursive clone is enough:
 
 ```bash
-git clone --recurse-submodules git@github.com:tonyyunyang/VEED-Hackathon.git
+git clone --recurse-submodules https://github.com/tonyyunyang/VEED-Hackathon.git
 cd VEED-Hackathon
 ```
 
-If you already cloned the repo without submodules:
+If you already cloned without submodules:
 
 ```bash
+git submodule sync --recursive
 git submodule update --init --recursive
 ```
 
-### Prerequisites
+If you want `git pull` to recurse into submodules automatically on your machine:
 
 ```bash
+git config --global submodule.recurse true
+```
+
+## What Is In This Repo
+
+| Path | Purpose |
+| --- | --- |
+| `src/` | React 19 + TypeScript + Vite frontend |
+| `server/` | FastAPI backend |
+| `face-detect-track/` | Repo-local face detection and tracking package |
+| `facefusion-VEED/` | Optional FaceFusion checkout used by the `facefusion` backend |
+| `tests/` | Python API, tracker, swapper, schema, and video-service tests |
+
+Required for a normal local deployment:
+
+- `face-detect-track/`
+- `face-detect-track/BoT-FaceSORT-VEED/`
+- `face-detect-track/insightface-VEED/`
+
+Optional:
+
+- `facefusion-VEED/` only matters when `FACE_SWAPPER_BACKEND=facefusion`
+
+## Prerequisites
+
+Use these versions for the least surprising local setup:
+
+- Node.js `20.19+` or `22.12+`
+- npm `10+`
+- Python `3.11` or `3.12`
+- `uv`
+- `ffmpeg`
+- `ffprobe`
+- `curl`
+
+Why:
+
+- `server/pyproject.toml` requires Python `>=3.11,<3.13`
+- `face-detect-track/pyproject.toml` also requires Python `>=3.11,<3.13`
+- Vite `7.3.1` requires Node `^20.19.0 || >=22.12.0`
+- the FaceFusion CLI checks for both `ffmpeg` and `curl`
+
+Version checks:
+
+```bash
+node --version
+npm --version
+python3 --version
+uv --version
+ffmpeg -version
+ffprobe -version
+curl --version
+```
+
+Verified locally in this repo with:
+
+- Node `20.20.1`
+- npm `10.8.2`
+- Python `3.11.7`
+- `uv 0.10.12`
+
+Example `ffmpeg` install commands:
+
+```bash
+# macOS
 brew install ffmpeg
+
+# Ubuntu / Debian
+sudo apt-get update
+sudo apt-get install -y ffmpeg curl
 ```
 
-`ffmpeg` and `ffprobe` must be on your `PATH` for video extraction, reassembly, and the FFmpeg-backed tests.
+## Install Dependencies
 
-### Backend
+### 1. Backend
 
-This repo now supports two local backend setup styles:
-- `uv` + `server/.venv` for the existing workflow
-- `conda` + your own interpreter, which is useful when you want FaceFusion and the server to share one environment
-
-#### Option A: existing `uv` workflow
+From the repo root:
 
 ```bash
-cd server
-uv sync --all-groups
-cd ..
+UV_CACHE_DIR=.uv-cache uv sync --directory server --locked --all-groups
 ```
 
-Notes:
-- conda is optional for local isolation only; the repo does not require conda to run
-- if you want `uv` to manage Python for you, run `uv python install 3.11` once before `uv sync`
-- if you prefer a local conda env, activate it first and then run `uv sync --python "$(which python)" --all-groups`
-- `uv` resolves the local `movie-like-shots` dependency from `face-detect-track/`
-- the synced backend environment lives under `server/.venv`
-- the default tracker backend is `movie_like_shots` with `ocsort`
+What this does:
 
-#### Option B: shared `conda` env (`veed`)
+- creates or updates `server/.venv`
+- installs the backend dependencies from `server/pyproject.toml`
+- installs `movie-like-shots` from `face-detect-track/` as a local editable dependency
+- uses `server/uv.lock`
+- keeps the `uv` cache in `.uv-cache/` under the repo root
 
-The repo contains a minimal `environment.yml` plus a bootstrap script that installs the shared backend stack into the active interpreter and verifies the local `facefusion-VEED` checkout in place.
+If you prefer the default global `uv` cache location, omit `UV_CACHE_DIR=.uv-cache`.
 
-```bash
-conda env create -f environment.yml
-conda activate veed
-./scripts/bootstrap_veed_env.sh
-```
+### 2. Frontend
 
-`environment.yml` pins Python 3.11 because it is the safest cross-stack option for the tracker backend and the legacy InsightFace swap path. If you already have a `veed` env, skip the create step and just activate it before running the bootstrap script.
-
-The bootstrap script intentionally installs the shared backend dependency set through the local `server` package instead of blindly piping `facefusion-VEED/requirements.txt` into the same interpreter. That keeps one compatible environment for the tracker backend, the existing server, and the new FaceFusion swap runner, while still smoke-checking `facefusion-VEED/facefusion.py headless-run`.
-
-### Frontend
+From the repo root:
 
 ```bash
 npm install
 ```
 
-### Environment
+Use `npm install`, not `npm ci`.
 
-Copy `.env.example` to `.env` and fill in:
+Reason:
 
-```
-FAL_KEY=your_fal_api_key
-ENABLE_LIPSYNC=false
-DUMMY_TRACKING=false
-```
+- the repo contains `package.json`
+- the repo does not contain a committed `package-lock.json`
+- the documented workflow here is `npm install` plus `npm run ...`
 
-The tracker-related defaults in `.env.example` are already set to use the merged `movie_like_shots` pipeline.
+## Environment Configuration
 
-### FaceFusion Backend
-
-The server keeps the existing upload/detect/swap/download API contract and can now use `facefusion-VEED` as the swap backend under the hood.
-
-To enable it:
+Create your local env file:
 
 ```bash
+cp .env.example .env
+```
+
+The backend loads the repo-root `.env` automatically.
+
+### Current Default `.env.example`
+
+The checked-in `.env.example` now defaults to:
+
+```dotenv
+FACE_SWAPPER_BACKEND=facefusion
+FACEFUSION_DIR=facefusion-VEED
+ENABLE_LIPSYNC=false
+```
+
+That is the easiest first-run local setup in this checkout.
+
+### Variables Most Users Need To Understand
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `FACE_SWAPPER_BACKEND` | No, but important | `facefusion` | Selects the swap backend |
+| `FACEFUSION_DIR` | For `facefusion` | `facefusion-VEED` | Path to the checked-out FaceFusion repo |
+| `FACEFUSION_PYTHON` | Optional | current Python interpreter | Overrides the Python executable used to launch FaceFusion |
+| `FACE_SWAP_REFERENCE_IMAGE` | Strongly recommended | empty | Uses one fixed source identity image |
+| `FACE_SWAP_REFERENCE_FACES_DIR` | Optional alternative | `server/reference_faces` | Uses a local library of source faces |
+| `FACE_SWAP_ALLOW_TARGET_THUMBNAIL_FALLBACK` | Optional | `true` | Reuses the tracked face thumbnail if no source image is available |
+| `ENABLE_LIPSYNC` | Optional | `false` | Enables fal.ai lipsync |
+| `FAL_KEY` | Only if `ENABLE_LIPSYNC=true` | empty | API key for lipsync |
+| `VITE_BACKEND_TARGET` | Optional | `http://localhost:8000` | Changes the frontend proxy target |
+| `STORAGE_DIR` | Optional | `server/storage` | Moves uploaded videos and generated outputs elsewhere |
+
+The tracker defaults in `.env.example` are already aligned with the local `movie_like_shots` pipeline and usually do not need to change.
+
+## Reference Face Inputs
+
+For meaningful swaps, provide a source identity in one of these ways.
+
+### Option A: one fixed source image
+
+```dotenv
+FACE_SWAP_REFERENCE_IMAGE=/absolute/path/to/source-face.jpg
+```
+
+### Option B: a reference library
+
+Put images under:
+
+```text
+server/reference_faces/
+  male/
+  female/
+```
+
+Example:
+
+```text
+server/reference_faces/male/20-29_actor.jpg
+server/reference_faces/female/30-39_presenter.png
+```
+
+If filenames include age ranges like `20-29_name.jpg`, the backend will try to pick an age-matched source image for the tracked face.
+
+If you provide neither a fixed image nor a reference library, the app can fall back to the tracked target thumbnail when:
+
+```dotenv
+FACE_SWAP_ALLOW_TARGET_THUMBNAIL_FALLBACK=true
+```
+
+That fallback is useful for smoke tests, but not for real identity replacement.
+
+## Choose A Swap Backend
+
+The API surface stays the same either way:
+
+- `POST /api/upload`
+- `POST /api/detect-faces`
+- `POST /api/swap`
+- `GET /api/status/{job_id}`
+- `GET /api/download/{job_id}`
+
+The difference is what happens inside `/api/swap`.
+
+### Option A: `facefusion`
+
+This is the default local path for this repo.
+
+Set:
+
+```dotenv
 FACE_SWAPPER_BACKEND=facefusion
 FACEFUSION_DIR=facefusion-VEED
 ```
 
-By default the FaceFusion runner uses the same Python interpreter that started the server. In a conda workflow that means it will use your active `veed` env automatically. If you want to force a specific interpreter, set `FACEFUSION_PYTHON`.
+Notes:
 
-When `FACE_SWAPPER_BACKEND=facefusion`, face metadata enrichment defaults off so the backend does not need to import InsightFace just to compute age/gender/embeddings. You can force it back on with `ENABLE_FACE_METADATA_ENRICHMENT=true` if your local environment supports InsightFace cleanly.
+- the repository already includes the `facefusion-VEED` checkout
+- the server calls `facefusion.py headless-run` directly
+- the checkout already includes local model assets under `facefusion-VEED/.assets/models/`
+- FaceFusion uses the same Python interpreter that starts the backend unless you set `FACEFUSION_PYTHON`
+- FaceFusion still needs a usable reference image or reference-face library
 
-FaceFusion still needs a source identity image. Provide one of:
-- `FACE_SWAP_REFERENCE_IMAGE=/absolute/path/to/source-face.jpg`
-- a local library under `server/reference_faces/male/` and `server/reference_faces/female/`
+### Option B: `insightface`
 
-If the reference library filenames include age ranges such as `20-29_actor.jpg`, the backend will prefer an age-matched file for the selected tracked face. If no reference image is configured, the server can fall back to the tracked face thumbnail when `FACE_SWAP_ALLOW_TARGET_THUMBNAIL_FALLBACK=true`, which is useful for smoke tests but not for meaningful identity replacement.
+You can still use the legacy InsightFace swap path:
 
-## Running
+```dotenv
+FACE_SWAPPER_BACKEND=insightface
+```
+
+Important caveat: the repository does not include `server/models/inswapper_128.onnx`. The InsightFace swap path will fail at swap time until that model file exists at:
+
+```text
+server/models/inswapper_128.onnx
+```
+
+So for `FACE_SWAPPER_BACKEND=insightface` you need both:
+
+1. a reference face source
+2. `server/models/inswapper_128.onnx`
+
+## First-Run Behavior And External Assets
+
+There are two first-run details worth knowing.
+
+### 1. Tracker detector weights
+
+`movie-like-shots` will automatically download the SCRFD detector file into:
+
+```text
+face-detect-track/models/scrfd/scrfd_10g_gnkps.onnx
+```
+
+if it is missing on the first detection run.
+
+That means:
+
+- the first face-detection request may take longer
+- internet access may be required the first time detection is run on a fresh checkout
+
+### 2. FaceFusion assets
+
+This checkout already contains a populated `facefusion-VEED/.assets/models/` directory with the models used by the default local FaceFusion configuration in this repo.
+
+If you change FaceFusion model settings later, FaceFusion may still request additional downloads depending on the processors you enable.
+
+## Run The App
+
+Open two terminals from the repo root.
+
+### Terminal 1: backend
 
 ```bash
-# Terminal 1: backend
 npm run server
-
-# Terminal 2: frontend
-npm run dev
 ```
 
-Frontend runs on `http://localhost:5173`, backend on `http://localhost:8000`.
+That command runs:
 
-You can also run the backend directly without the npm wrapper:
+```bash
+cd server && UV_CACHE_DIR=${UV_CACHE_DIR:-../.uv-cache} uv run uvicorn main:app --port 8000
+```
+
+Default backend URL:
+
+```text
+http://127.0.0.1:8000
+```
+
+### Terminal 2: frontend
+
+```bash
+npm run dev -- --host 127.0.0.1
+```
+
+Default frontend URL:
+
+```text
+http://127.0.0.1:5173
+```
+
+The Vite dev server proxies `/api` requests to `http://localhost:8000` unless you override `VITE_BACKEND_TARGET`.
+
+If port `8000` is already in use, start the backend directly on another port:
 
 ```bash
 cd server
-uv run uvicorn main:app --port 8000
+UV_CACHE_DIR=../.uv-cache uv run uvicorn main:app --host 127.0.0.1 --port 8001 --reload
 ```
 
-The normal runtime path is `uv` + `server/.venv`; there is no repo-level conda requirement.
-
-With a shared conda env, you can also run:
+Then start the frontend with:
 
 ```bash
-conda activate veed
+VITE_BACKEND_TARGET=http://127.0.0.1:8001 npm run dev -- --host 127.0.0.1
+```
+
+## API Smoke Test
+
+You can verify the backend before using the UI.
+
+### 1. Confirm the server is responding
+
+This should return a `404` JSON payload because the job ID does not exist yet:
+
+```bash
+curl -i http://127.0.0.1:8000/api/status/nonexist
+```
+
+Expected status:
+
+```text
+HTTP/1.1 404 Not Found
+{"detail":"Job not found"}
+```
+
+### 2. Upload a local test video
+
+The repo already includes `tests/fixtures/test_video.mp4`:
+
+```bash
+curl -s \
+  -F "file=@tests/fixtures/test_video.mp4" \
+  http://127.0.0.1:8000/api/upload
+```
+
+### 3. Run face detection
+
+Replace `<VIDEO_ID>` with the value from the upload step:
+
+```bash
+curl -s \
+  -X POST http://127.0.0.1:8000/api/detect-faces \
+  -H "Content-Type: application/json" \
+  -d '{"video_id":"<VIDEO_ID>"}'
+```
+
+### 4. Start a swap job
+
+This only succeeds if you have configured:
+
+- a working swap backend
+- a usable reference face source
+
+```bash
+curl -s \
+  -X POST http://127.0.0.1:8000/api/swap \
+  -H "Content-Type: application/json" \
+  -d '{"video_id":"<VIDEO_ID>","face_ids":["face_0"]}'
+```
+
+### 5. Poll job status
+
+```bash
+curl -s http://127.0.0.1:8000/api/status/<JOB_ID>
+```
+
+### 6. Download the completed output
+
+```bash
+curl -L http://127.0.0.1:8000/api/download/<JOB_ID> --output swapped.mp4
+```
+
+## What Gets Written At Runtime
+
+By default, the backend writes working files under:
+
+```text
+server/storage/
+```
+
+Typical files and folders:
+
+```text
+server/storage/<video_id>/
+  original.mp4
+  frames/
+  audio.aac
+  faces.json
+  swapped/
+  output.mp4
+```
+
+If `FACE_SWAPPER_BACKEND=facefusion`, temporary runtime folders are also created under:
+
+```text
+server/storage/<video_id>/.facefusion_runtime/
+```
+
+Those are cleaned up automatically unless:
+
+```dotenv
+FACEFUSION_KEEP_INTERMEDIATES=true
+```
+
+## Verification Checklist
+
+These are the fastest reliable checks for a new developer after setup.
+
+### Frontend
+
+```bash
+npm install
+npm run build
+```
+
+`npm run build` was verified successfully in this repo.
+
+### Backend startup
+
+```bash
+curl -I http://127.0.0.1:8000/docs
+```
+
+You should get `HTTP/1.1 200 OK` once the backend is running.
+
+### Full backend test suite
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run --directory server pytest ../tests -q
+```
+
+### Targeted backend tests
+
+```bash
+UV_CACHE_DIR=.uv-cache uv run --directory server pytest ../tests/test_api.py ../tests/test_face_tracker.py ../tests/test_face_swapper.py ../tests/test_schemas.py ../tests/test_video_service.py -q
+```
+
+The FFmpeg-backed video-service tests are skipped automatically when `ffmpeg` or `ffprobe` are missing.
+
+## Known Local Gotchas
+
+### `npm run server` fails with `uv: command not found`
+
+Install `uv`, then rerun:
+
+```bash
+UV_CACHE_DIR=.uv-cache uv sync --directory server --all-groups
+```
+
+### Port `8000` is already in use
+
+Start the backend on another port and point Vite at it:
+
+```bash
 cd server
-python -m uvicorn main:app --port 8000
+UV_CACHE_DIR=../.uv-cache uv run uvicorn main:app --host 127.0.0.1 --port 8001 --reload
 ```
-
-## Testing
-
-Backend tests:
 
 ```bash
-server/.venv/bin/pytest tests/test_face_tracker.py tests/test_api.py tests/test_schemas.py
+VITE_BACKEND_TARGET=http://127.0.0.1:8001 npm run dev -- --host 127.0.0.1
 ```
 
-Full Python suite:
+### Swap jobs fail immediately
 
-```bash
-server/.venv/bin/pytest tests
+Check the following first:
+
+- `FACE_SWAPPER_BACKEND` is set to the backend you actually want
+- you configured `FACE_SWAP_REFERENCE_IMAGE` or added files under `server/reference_faces/`
+- if using `insightface`, `server/models/inswapper_128.onnx` exists
+- if using `facefusion`, `FACEFUSION_DIR=facefusion-VEED` is correct
+
+### Lipsync fails
+
+Lipsync is optional. If you enable it, you must set:
+
+```dotenv
+ENABLE_LIPSYNC=true
+FAL_KEY=...
 ```
 
-The FFmpeg-backed video service tests in `tests/test_video_service.py` are skipped automatically when `ffmpeg` or `ffprobe` are not installed.
+### `npm run lint` reports errors from `.venv`, `server/.venv`, `.uv-cache`, or other local caches
 
-## Team Workstreams
+That command is not currently the best deployment smoke test in a workspace that already contains local environments or cache directories. Use `npm run build` plus the backend startup/tests above as the reliable setup verification path.
 
-| Person | Scope | Key Files |
-|--------|-------|-----------|
-| 1 | Face tracking & identification | `server/services/face_tracker.py` |
-| 2 | Face replacement & lipsync | `server/services/face_swapper.py`, `lipsync.py`, `video.py` |
-| 3 | Frontend | `src/components/`, `src/App.tsx` |
+## Architecture Summary
 
-Shared contract: `server/models/schemas.py` + `src/types.ts`
+| Layer | What is used |
+| --- | --- |
+| Frontend | React 19 + TypeScript + Vite + Tailwind CSS 4 |
+| Backend API | FastAPI + Uvicorn |
+| Face tracking | `movie-like-shots` from the local `face-detect-track` submodule |
+| Tracker vendor repos | `BoT-FaceSORT-VEED` and `insightface-VEED` |
+| Swap backends | `insightface` or the local `facefusion-VEED` checkout |
+| Optional lipsync | fal.ai via `FAL_KEY` |
+| Video I/O | `ffmpeg` / `ffprobe` |
 
-## API Endpoints
+## Additional Context
 
-- `POST /api/upload` — upload video
-- `POST /api/detect-faces` — detect and cluster faces
-- `POST /api/swap` — start async face swap job
-- `GET /api/status/{job_id}` — poll job progress
-- `GET /api/download/{job_id}` — download result
+Detailed implementation notes live in:
 
-Full spec: [`docs/superpowers/specs/2026-03-21-face-swap-design.md`](docs/superpowers/specs/2026-03-21-face-swap-design.md)
+- `docs/superpowers/specs/2026-03-21-face-swap-design.md`
+- `docs/superpowers/plans/2026-03-21-face-swap-implementation.md`
