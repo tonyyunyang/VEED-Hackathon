@@ -8,8 +8,10 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -56,6 +58,10 @@ _STYLE_PROMPT_BLOCKED_PATTERNS = re.compile(
     r"javascript\s*:|data\s*:)",
     re.IGNORECASE,
 )
+_RUNWARE_API_URL = "https://api.runware.ai/v1"
+_RUNWARE_INITIAL_POLL_DELAY_SECONDS = 2.0
+_RUNWARE_MAX_POLL_DELAY_SECONDS = 8.0
+_RUNWARE_MAX_WAIT_SECONDS = 150.0
 
 
 def _sanitize_style_prompt(raw: str) -> str:
@@ -84,128 +90,183 @@ def _build_runware_prompt(age: int, gender: str, style_prompt: str = "") -> str:
     return base
 
 
+@dataclass(frozen=True)
+class ReferenceResolution:
+    path: str | None
+    source_label: str | None = None
+
+
+def _runware_error_message(payload: dict[str, Any], task_uuid: str | None = None) -> str | None:
+    errors = payload.get("errors")
+    if not isinstance(errors, list):
+        return None
+
+    for item in errors:
+        if not isinstance(item, dict):
+            continue
+        if task_uuid and item.get("taskUUID") not in {None, task_uuid}:
+            continue
+        message = str(item.get("message") or item.get("code") or "Runware task failed")
+        code = str(item.get("code") or "").strip()
+        if code and code not in message:
+            return f"{code}: {message}"
+        return message
+    return None
+
+
+def _runware_image_url(payload: dict[str, Any], task_uuid: str) -> tuple[str | None, str]:
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return None, "missing"
+
+    saw_matching_task = False
+    for item in data:
+        if not isinstance(item, dict) or item.get("taskUUID") != task_uuid:
+            continue
+        saw_matching_task = True
+        status = str(item.get("status") or "").strip().lower()
+        if item.get("imageURL"):
+            return str(item["imageURL"]), "ready"
+        if status in {"queued", "pending", "processing"}:
+            return None, "processing"
+        if status in {"success", "completed"}:
+            return None, "malformed"
+
+    if saw_matching_task:
+        return None, "malformed"
+    return None, "missing"
+
+
+def _post_runware_tasks(client: Any, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    response = client.post(_RUNWARE_API_URL, json=tasks)
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Runware returned a non-JSON response") from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("Runware returned an unexpected response payload")
+
+    if response.status_code >= 400:
+        detail = _runware_error_message(payload) or response.text.strip() or f"HTTP {response.status_code}"
+        raise RuntimeError(f"Runware HTTP {response.status_code}: {detail}")
+
+    return payload
+
+
 def _generate_face_runware(
     thumbnail_path: str,
     output_path: str,
     age: int,
     gender: str,
     style_prompt: str = "",
-) -> str | None:
+) -> tuple[str | None, str | None]:
     """Generate a neutral replacement face via Runware img2img.
 
     Uses the detected face thumbnail as seed image and steers the generation
-    toward a neutral, demographically-consistent face.  Calls the Runware
-    WebSocket API directly (no SDK needed).  Returns the path to the
-    generated image on success, or ``None`` on failure.
+    toward a neutral, demographically-consistent face. Calls Runware's
+    documented async image inference flow and polls until the image is ready.
+    Returns ``(path, error)`` where ``path`` is the generated image on success
+    and ``error`` is a human-readable failure reason on fallback.
     """
     if not RUNWARE_API_KEY:
         logger.info("Runware: skipping — RUNWARE_API_KEY not set")
-        return None
+        return None, "Runware API key is not configured on the server"
 
     try:
-        import json
-
         import httpx
-        import websockets.sync.client as ws_sync
-
-        RUNWARE_WS_URL = "wss://ws-api.runware.ai/v1"
 
         prompt = _build_runware_prompt(age, gender, style_prompt)
         logger.info("Runware: generating face (age=%s, gender=%s, style=%r)", age, gender, style_prompt)
         logger.info("Runware: prompt → %s", prompt)
 
         task_uuid = str(uuid.uuid4())
+        request_payload = [{
+            "taskType": "imageInference",
+            "taskUUID": task_uuid,
+            "deliveryMethod": "async",
+            "model": "runware:101@1",
+            "positivePrompt": prompt,
+            "seedImage": seed_data_uri,
+            "strength": 0.55,
+            "width": 512,
+            "height": 512,
+            "steps": 30,
+            "numberResults": 1,
+            "outputType": "URL",
+            "outputFormat": "JPG",
+            "includeCost": True,
+        }]
 
-        with ws_sync.connect(RUNWARE_WS_URL, max_size=None, open_timeout=15) as conn:
-            # Authenticate
-            conn.send(json.dumps([{"taskType": "authentication", "apiKey": RUNWARE_API_KEY}]))
-            auth_resp = json.loads(conn.recv(timeout=15))
-            if isinstance(auth_resp, dict) and auth_resp.get("error"):
-                logger.warning("Runware auth failed: %s", auth_resp)
-                return None
-            if isinstance(auth_resp, list):
-                for item in auth_resp:
-                    if isinstance(item, dict) and item.get("error"):
-                        logger.warning("Runware auth failed: %s", item)
-                        return None
+        headers = {
+            "Authorization": f"Bearer {RUNWARE_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        timeout = httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=30.0)
 
-            logger.info("Runware auth OK, sending text-to-image inference request")
+        logger.info("Submitting Runware async imageInference task %s", task_uuid)
 
-            # Send text-to-image request (no seed — thumbnails are too low
-            # quality for img2img; the prompt carries the demographics)
-            request_payload = {
-                "taskType": "imageInference",
-                "taskUUID": task_uuid,
-                "model": "runware:101@1",
-                "positivePrompt": prompt,
-                "width": 512,
-                "height": 512,
-                "steps": 30,
-                "numberResults": 1,
-                "outputType": "URL",
-                "outputFormat": "JPG",
-            }
-            conn.send(json.dumps([request_payload]))
+        with httpx.Client(headers=headers, timeout=timeout) as client:
+            submit_payload = _post_runware_tasks(client, request_payload)
+            submit_error = _runware_error_message(submit_payload, task_uuid)
+            if submit_error:
+                logger.warning("Runware submission failed for task %s: %s", task_uuid, submit_error)
+                return None, submit_error
 
-            # Wait for result (poll messages until we get our task back)
-            image_url = None
-            for attempt in range(30):
-                raw = conn.recv(timeout=120)
-                msg = json.loads(raw)
-                logger.debug("Runware recv #%d: %s", attempt, str(msg)[:500])
+            image_url, submit_state = _runware_image_url(submit_payload, task_uuid)
+            if submit_state == "malformed":
+                return None, "Runware returned a completed response without an image URL"
+            poll_delay = _RUNWARE_INITIAL_POLL_DELAY_SECONDS
+            deadline = time.monotonic() + _RUNWARE_MAX_WAIT_SECONDS
+            missing_poll_count = 0
 
-                # Handle both {"data": [...]} wrapper and raw list formats
-                if isinstance(msg, dict):
-                    if msg.get("error") or msg.get("errors"):
-                        logger.warning("Runware error response: %s", msg)
-                        return None
-                    data_list = msg.get("data", [])
-                elif isinstance(msg, list):
-                    data_list = msg
+            while not image_url and time.monotonic() < deadline:
+                logger.info(
+                    "Polling Runware task %s for completion in %.1fs",
+                    task_uuid,
+                    poll_delay,
+                )
+                time.sleep(poll_delay)
+                poll_payload = _post_runware_tasks(
+                    client,
+                    [{"taskType": "getResponse", "taskUUID": task_uuid}],
+                )
+                poll_error = _runware_error_message(poll_payload, task_uuid)
+                if poll_error:
+                    logger.warning("Runware task %s failed: %s", task_uuid, poll_error)
+                    return None, poll_error
+                image_url, poll_state = _runware_image_url(poll_payload, task_uuid)
+                if poll_state == "malformed":
+                    return None, "Runware returned a completed response without an image URL"
+                if poll_state == "missing":
+                    missing_poll_count += 1
+                    if missing_poll_count >= 3:
+                        return None, (
+                            "Runware polling returned no data for the submitted task UUID"
+                        )
                 else:
-                    continue
+                    missing_poll_count = 0
+                poll_delay = min(poll_delay * 1.5, _RUNWARE_MAX_POLL_DELAY_SECONDS)
 
-                if not isinstance(data_list, list):
-                    continue
+            if not image_url:
+                logger.warning("Runware task %s timed out after %.1fs", task_uuid, _RUNWARE_MAX_WAIT_SECONDS)
+                return None, (
+                    "Runware image generation timed out while waiting for async task completion"
+                )
 
-                for item in data_list:
-                    if not isinstance(item, dict):
-                        continue
-                    # Check for task-specific error
-                    if item.get("taskUUID") == task_uuid and item.get("error"):
-                        logger.warning("Runware task error: %s", item)
-                        return None
-                    # Check for global errors (e.g. invalid request)
-                    if item.get("errorId") or item.get("errorMessage"):
-                        logger.warning("Runware error: %s", item)
-                        return None
-                    # Check for our result
-                    if item.get("taskUUID") == task_uuid and item.get("imageURL"):
-                        image_url = item["imageURL"]
-                        break
-                if image_url:
-                    break
-
-        if not image_url:
-            logger.warning("Runware: no image URL received after polling")
-            return None
-
-        logger.info("Runware: received image URL → %s", image_url)
-
-        # Download the generated image
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with httpx.Client() as client:
+            logger.info("Runware task %s completed, downloading generated image", task_uuid)
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             resp = client.get(image_url)
             resp.raise_for_status()
             with open(output_path, "wb") as out:
                 out.write(resp.content)
 
         logger.info("Runware: generated face saved to %s (%d bytes)", output_path, len(resp.content))
-        return output_path
+        return output_path, None
 
-    except Exception:
+    except Exception as exc:
         logger.warning("Runware face generation failed, falling back", exc_info=True)
-        return None
+        return None, str(exc)
 
 
 def _get_app() -> FaceAnalysis:
@@ -337,6 +398,42 @@ class ReferenceFaceResolver:
         self.reference_faces_dir = reference_faces_dir
         self.allow_target_thumbnail_fallback = allow_target_thumbnail_fallback
         self.style_prompt = style_prompt
+        self._warnings: list[str] = []
+
+    def get_warnings(self) -> list[str]:
+        return list(self._warnings)
+
+    def _record_warning(self, message: str) -> None:
+        if message and message not in self._warnings:
+            self._warnings.append(message)
+
+    def _resolve_fallback(self, video_dir: str, face_id: str, face_data: dict) -> ReferenceResolution:
+        direct_path = Path(self.reference_image) if self.reference_image else None
+        if direct_path and direct_path.is_file():
+            return ReferenceResolution(
+                path=str(direct_path),
+                source_label="the configured server reference image",
+            )
+
+        age = int(face_data.get("age") or 0)
+        gender = str(face_data.get("gender") or "").strip().lower()
+        candidates = self._candidates_for_face(face_id, gender, age)
+        if candidates:
+            return ReferenceResolution(
+                path=str(candidates),
+                source_label="the local reference face library",
+            )
+
+        thumbnail_name = face_data.get("thumbnail_path")
+        if self.allow_target_thumbnail_fallback and thumbnail_name:
+            thumbnail_path = Path(video_dir) / thumbnail_name
+            if thumbnail_path.is_file():
+                return ReferenceResolution(
+                    path=str(thumbnail_path),
+                    source_label="the detected face thumbnail",
+                )
+
+        return ReferenceResolution(path=None, source_label=None)
 
     def resolve(self, video_dir: str, face_id: str, face_data: dict) -> str | None:
         logger.info(
@@ -352,52 +449,58 @@ class ReferenceFaceResolver:
             logger.info("[%s] Reference source: user-uploaded image → %s", face_id, result)
             return result
 
-        # 2. Global reference image from env
-        direct_path = Path(self.reference_image) if self.reference_image else None
-        if direct_path and direct_path.is_file():
-            logger.info("[%s] Reference source: global env image → %s", face_id, direct_path)
-            return str(direct_path)
+        fallback_resolution = self._resolve_fallback(video_dir, face_id, face_data)
+        raw_style_prompt = self.style_prompt.strip()
+        sanitized_style_prompt = _sanitize_style_prompt(self.style_prompt)
 
-        age = int(face_data.get("age") or 0)
-        gender = str(face_data.get("gender") or "").strip().lower()
+        if raw_style_prompt and not sanitized_style_prompt:
+            if fallback_resolution.path:
+                self._record_warning(
+                    "Runware reference generation was skipped because the prompt was rejected "
+                    f"during sanitization. Falling back to {fallback_resolution.source_label}."
+                )
+            return fallback_resolution.path
 
-        # 3. Runware AI face generation (text-to-image from demographics)
+        # 2. Runware AI face generation (text-to-image from demographics) when requested
         thumbnail_name = face_data.get("thumbnail_path")
-        if RUNWARE_API_KEY and thumbnail_name:
+        if sanitized_style_prompt:
+            if not thumbnail_name:
+                if fallback_resolution.path:
+                    self._record_warning(
+                        "Runware reference generation was skipped because no detected face thumbnail "
+                        f"was available. Falling back to {fallback_resolution.source_label}."
+                    )
+                return fallback_resolution.path
+
             thumbnail_path = Path(video_dir) / thumbnail_name
-            if thumbnail_path.is_file():
-                logger.info("[%s] Attempting Runware AI generation (thumbnail: %s)", face_id, thumbnail_path)
-                output_path = str(
-                    Path(video_dir) / f".runware_generated_{face_id}.jpg"
-                )
-                generated = _generate_face_runware(
-                    str(thumbnail_path), output_path, age, gender,
-                    self.style_prompt,
-                )
-                if generated:
-                    logger.info("[%s] Reference source: Runware AI generated → %s", face_id, generated)
-                    return generated
-                logger.warning("[%s] Runware generation failed, trying fallbacks", face_id)
-            else:
-                logger.warning("[%s] Runware: thumbnail not found at %s", face_id, thumbnail_path)
-        elif not RUNWARE_API_KEY:
-            logger.info("[%s] Runware: skipped (no API key)", face_id)
+            if not thumbnail_path.is_file():
+                if fallback_resolution.path:
+                    self._record_warning(
+                        "Runware reference generation was skipped because the detected face thumbnail "
+                        f"could not be found. Falling back to {fallback_resolution.source_label}."
+                    )
+                return fallback_resolution.path
 
-        # 4. Fallback: pick from local reference library
-        candidates = self._candidates_for_face(face_id, gender, age)
-        if candidates:
+            generated, runware_error = _generate_face_runware(
+                str(thumbnail_path),
+                str(Path(video_dir) / f".runware_generated_{face_id}.jpg"),
+                int(face_data.get("age") or 0),
+                str(face_data.get("gender") or "").strip().lower(),
+                sanitized_style_prompt,
+            )
+            if generated:
+                return generated
+
+            if runware_error and fallback_resolution.path:
+                self._record_warning(
+                    f"Runware reference generation failed for {face_id}: {runware_error}. "
+                    f"Falling back to {fallback_resolution.source_label}."
+                )
             logger.info("[%s] Reference source: local library → %s", face_id, candidates)
-            return str(candidates)
+            return fallback_resolution.path
 
-        if self.allow_target_thumbnail_fallback:
-            if thumbnail_name:
-                thumbnail_path = Path(video_dir) / thumbnail_name
-                if thumbnail_path.is_file():
-                    logger.info("[%s] Reference source: thumbnail fallback → %s", face_id, thumbnail_path)
-                    return str(thumbnail_path)
-
-        logger.warning("[%s] Reference source: none found", face_id)
-        return None
+        # 3. No requested generation, so use the configured fallback chain directly
+        return fallback_resolution.path
 
     def _candidates_for_face(self, face_id: str, gender: str, age: int) -> Path | None:
         root = Path(self.reference_faces_dir)
@@ -466,6 +569,9 @@ class InsightFaceSwapAdapter(FaceSwapAdapter):
 
 
 class FaceSwapEngine(ABC):
+    def get_warnings(self) -> list[str]:
+        return []
+
     @abstractmethod
     def swap_clip(
         self,
@@ -489,6 +595,9 @@ class InsightFaceSwapEngine(FaceSwapEngine):
     ):
         self.video_dir = video_dir
         self.reference_resolver = reference_resolver or ReferenceFaceResolver()
+
+    def get_warnings(self) -> list[str]:
+        return self.reference_resolver.get_warnings()
 
     def swap_clip(
         self,
@@ -533,6 +642,9 @@ class FaceFusionSwapEngine(FaceSwapEngine):
         self.facefusion_root = Path(FACEFUSION_DIR)
         self.facefusion_script = self.facefusion_root / "facefusion.py"
         self.bypass_content_analyser = FACEFUSION_BYPASS_CONTENT_ANALYSER
+
+    def get_warnings(self) -> list[str]:
+        return self.reference_resolver.get_warnings()
 
     def _build_swap_cmd(
         self,

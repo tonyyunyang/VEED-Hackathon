@@ -99,7 +99,7 @@ echo -e "${RESET}"
 # ── 1. Backend server ────────────────────────────────────────────────
 echo -e "${GREEN}Starting server...${RESET}"
 run_with_prefix "$GREEN" "server" \
-    bash -c "cd '${ROOT_DIR}/server' && UV_CACHE_DIR='${ROOT_DIR}/.uv-cache' uv run uvicorn main:app --port 8000 --reload"
+    bash -c "cd '${ROOT_DIR}/server' && UV_CACHE_DIR='${ROOT_DIR}/.uv-cache' uv run uvicorn main:app --port 8000 --reload --reload-dir '${ROOT_DIR}/server' --reload-exclude 'storage' --reload-exclude 'storage/**'"
 
 # ── 2. FaceFusion API ────────────────────────────────────────────────
 echo -e "${BLUE}Starting FaceFusion API...${RESET}"

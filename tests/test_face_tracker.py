@@ -131,6 +131,38 @@ def test_detect_and_cluster_uses_tracker_cli(monkeypatch, tmp_path):
     assert metadata_calls[1][1] == 4
 
 
+def test_detect_faces_in_image(monkeypatch, tmp_path):
+    image_path = tmp_path / "portrait.jpg"
+    storage_dir = tmp_path / "storage"
+    storage_dir.mkdir()
+    _write_frame(str(image_path), (10, 80, 140))
+
+    detected_face = SimpleNamespace(
+        bbox=np.array([12.0, 18.0, 52.0, 66.0], dtype=np.float32),
+        age=29,
+        gender=0,
+        normed_embedding=np.ones(512, dtype=np.float32),
+    )
+
+    class DummyApp:
+        def get(self, frame):
+            return [detected_face]
+
+    monkeypatch.setattr(face_tracker, "DUMMY_TRACKING", False)
+    monkeypatch.setattr(face_tracker, "_get_app", lambda: DummyApp())
+
+    result = face_tracker.detect_faces_in_image(str(image_path), str(storage_dir))
+
+    assert list(result["faces"].keys()) == ["face_0"]
+    face = result["faces"]["face_0"]
+    assert face["age"] == 29
+    assert face["gender"] == "female"
+    assert face["frame_count"] == 1
+    assert face["frames"] == {"0": [12.0, 18.0, 52.0, 66.0]}
+    assert face["thumbnail"].startswith("data:image/jpeg;base64,")
+    assert os.path.exists(storage_dir / "face_0_thumb.jpg")
+
+
 def test_build_tracker_command_includes_optional_filter_flags(monkeypatch):
     monkeypatch.setattr(face_tracker, "DEFAULT_TRACKER_TYPE", "botfacesort")
     monkeypatch.setattr(face_tracker, "DEFAULT_TRACKER_DEVICE", "auto")
@@ -310,7 +342,13 @@ def test_save_and_load_faces_json_round_trip(tmp_path):
             }
         }
     }
-    video_info = {"fps": 30.0, "total_frames": 10}
+    video_info = {
+        "fps": 30.0,
+        "total_frames": 10,
+        "media_type": "video",
+        "width": 1280,
+        "height": 720,
+    }
     json_path = tmp_path / "faces.json"
 
     face_tracker.save_faces_json(faces_data, video_info, str(json_path))
@@ -318,4 +356,7 @@ def test_save_and_load_faces_json_round_trip(tmp_path):
     loaded = face_tracker.load_faces_json(str(json_path))
     assert loaded["fps"] == 30.0
     assert loaded["total_frames"] == 10
+    assert loaded["media_type"] == "video"
+    assert loaded["width"] == 1280
+    assert loaded["height"] == 720
     assert loaded["faces"]["face_0"]["frame_count"] == 1

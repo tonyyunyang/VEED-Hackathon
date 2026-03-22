@@ -11,7 +11,15 @@ import pytest
 # Add server to path so imports work
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 
-from services.video import extract_frames, extract_audio, reassemble_video, get_video_info
+from services.video import (
+    extract_audio,
+    extract_frames,
+    get_video_info,
+    media_type_for_path,
+    reassemble_video,
+    stage_image_as_frames,
+    write_image_output,
+)
 
 FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures")
 TEST_VIDEO = os.path.join(FIXTURES, "test_video.mp4")
@@ -33,6 +41,7 @@ def test_get_video_info():
     info = get_video_info(TEST_VIDEO)
     assert "fps" in info
     assert "total_frames" in info
+    assert info["media_type"] == "video"
     assert info["fps"] > 0
     assert info["total_frames"] > 0
 
@@ -91,3 +100,41 @@ def test_reassemble_video_pads_odd_dimensions(tmp_dir):
 
     assert os.path.exists(output_path)
     assert os.path.getsize(output_path) > 0
+
+
+def test_stage_image_as_frames(tmp_dir):
+    image_path = os.path.join(tmp_dir, "source.png")
+    image = np.zeros((64, 96, 3), dtype=np.uint8)
+    image[:] = (20, 40, 60)
+    assert cv2.imwrite(image_path, image)
+
+    frames_dir = os.path.join(tmp_dir, "image_frames")
+    info = stage_image_as_frames(image_path, frames_dir)
+
+    assert info["media_type"] == "image"
+    assert info["fps"] == 1.0
+    assert info["total_frames"] == 1
+    assert info["width"] == 96
+    assert info["height"] == 64
+    assert os.path.exists(os.path.join(frames_dir, "frame_0001.jpg"))
+
+
+def test_write_image_output(tmp_dir):
+    frames_dir = os.path.join(tmp_dir, "frames")
+    os.makedirs(frames_dir, exist_ok=True)
+    image = np.zeros((48, 80, 3), dtype=np.uint8)
+    image[:] = (70, 50, 30)
+    assert cv2.imwrite(os.path.join(frames_dir, "frame_0001.jpg"), image)
+
+    output_path = os.path.join(tmp_dir, "output.png")
+    write_image_output(frames_dir, output_path)
+
+    assert os.path.exists(output_path)
+    rendered = cv2.imread(output_path)
+    assert rendered is not None
+    assert rendered.shape[:2] == (48, 80)
+
+
+def test_media_type_for_path():
+    assert media_type_for_path("clip.mp4") == "video"
+    assert media_type_for_path("portrait.png") == "image"

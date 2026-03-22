@@ -27,7 +27,8 @@ const res = await fetch(`/api/upload-reference/${videoId}`, {
 - Overwrites any previous upload for that video
 - This image becomes the **highest priority** source face for all swaps on this video
 - Call this **after** `/api/upload` and **before** `/api/swap`
-- Optional — if not called, the backend falls through to AI generation or the reference library
+- Optional — if not called, the backend falls through to Runware generation when a
+  `style_prompt` is provided, or to the configured fallback references otherwise
 
 **UI suggestion:** An optional "Upload reference face" button/dropzone on the face selection screen, shown after faces are detected.
 
@@ -71,12 +72,15 @@ Content-Type: application/json
 When the swap runs, the backend picks the source face using this order:
 
 1. **Uploaded reference** — from `POST /api/upload-reference/{video_id}`
-2. **Global env image** — `FACE_SWAP_REFERENCE_IMAGE` (server config, not UI-controlled)
-3. **Runware AI generation** — auto-generates a neutral face from the detected thumbnail, with optional `style_prompt`
+2. **Runware AI generation** — auto-generates a neutral face from the detected thumbnail, but only when `style_prompt` is provided
+3. **Global env image** — `FACE_SWAP_REFERENCE_IMAGE` (server config, not UI-controlled)
 4. **Reference library** — picks from `server/reference_faces/` by gender/age
 5. **Thumbnail fallback** — reuses the detected face's own crop
 
-The UI only needs to care about #1 (upload) and #3 (style_prompt). The rest is backend config.
+If Runware fails, the backend falls through to the remaining fallback sources and
+returns a warning so the UI can surface that fallback.
+
+The UI only needs to care about #1 (upload) and #2 (style_prompt). The rest is backend config.
 
 ---
 
