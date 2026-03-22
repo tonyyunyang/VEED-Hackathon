@@ -222,6 +222,7 @@ def test_extract_face_clips_uses_stored_bboxes(monkeypatch, tmp_path):
     assert "face_0" in manifests
     manifest = manifests["face_0"]
     assert len(manifest["crops"]) == 3
+    assert manifest["frame_count"] == 3
 
     for fname, (x1, y1, x2, y2) in manifest["crops"].items():
         crop_path = os.path.join(manifest["clip_dir"], fname)
@@ -230,6 +231,52 @@ def test_extract_face_clips_uses_stored_bboxes(monkeypatch, tmp_path):
         assert crop is not None
         assert crop.shape[0] == y2 - y1
         assert crop.shape[1] == x2 - x1
+
+
+def test_extract_face_clips_respects_trim_window(monkeypatch, tmp_path):
+    frames_dir = tmp_path / "frames"
+    output_dir = tmp_path / "clips"
+    _make_frames(str(frames_dir), count=5)
+    stale_clip_dir = output_dir / "face_0"
+    stale_clip_dir.mkdir(parents=True)
+    (stale_clip_dir / "frame_0001.jpg").write_bytes(b"stale")
+
+    faces_json = {
+        "faces": {
+            "face_0": {
+                "age": 31,
+                "gender": "female",
+                "thumbnail": "data:image/jpeg;base64,TEST",
+                "thumbnail_path": "face_0_thumb.jpg",
+                "embedding": [0.0] * 512,
+                "frames": {
+                    "0": [10.0, 10.0, 34.0, 34.0],
+                    "2": [12.0, 11.0, 36.0, 35.0],
+                    "4": [14.0, 12.0, 38.0, 36.0],
+                },
+                "frame_count": 3,
+            }
+        }
+    }
+
+    def fail_if_called():
+        raise AssertionError("extract_face_clips should not re-detect faces")
+
+    monkeypatch.setattr(face_tracker, "_get_app", fail_if_called)
+
+    manifests = face_tracker.extract_face_clips(
+        str(frames_dir),
+        faces_json,
+        ["face_0"],
+        str(output_dir),
+        start_frame=2,
+        end_frame=4,
+    )
+
+    manifest = manifests["face_0"]
+    assert manifest["frame_count"] == 1
+    assert sorted(manifest["crops"].keys()) == ["frame_0003.jpg"]
+    assert not (stale_clip_dir / "frame_0001.jpg").exists()
 
 
 def test_dummy_mode_remains_available(monkeypatch, tmp_path):

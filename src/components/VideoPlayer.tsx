@@ -468,7 +468,10 @@ interface VideoPlayerProps {
   useLiveTracking?: boolean;
   error?: string | null;
   isSwapping?: boolean;
-  onSwap?: (selectedIds: string[]) => void;
+  onSwap?: (
+    selectedIds: string[],
+    frameWindow: { startFrame: number; endFrame: number },
+  ) => void;
   onBack?: () => void;
 }
 
@@ -911,7 +914,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     }
 
     if (onSwap) {
-      onSwap(chosenIds);
+      const normalizedEndFrame = Math.max(clipStartFrame + 1, clipEndFrame);
+      onSwap(chosenIds, {
+        startFrame: clipStartFrame,
+        endFrame: normalizedEndFrame,
+      });
       return;
     }
 

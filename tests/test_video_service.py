@@ -4,6 +4,8 @@ import sys
 import shutil
 import tempfile
 
+import cv2
+import numpy as np
 import pytest
 
 # Add server to path so imports work
@@ -73,3 +75,19 @@ def test_reassemble_video(tmp_dir):
     out_info = get_video_info(output_path)
     assert out_info["fps"] > 0
     assert out_info["total_frames"] > 0
+
+
+def test_reassemble_video_pads_odd_dimensions(tmp_dir):
+    frames_dir = os.path.join(tmp_dir, "odd_frames")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    for index in range(1, 4):
+        image = np.zeros((187, 187, 3), dtype=np.uint8)
+        image[:] = (index * 30, index * 20, index * 10)
+        assert cv2.imwrite(os.path.join(frames_dir, f"frame_{index:04d}.jpg"), image)
+
+    output_path = os.path.join(tmp_dir, "odd_output.mp4")
+    reassemble_video(frames_dir, None, output_path, 25.0)
+
+    assert os.path.exists(output_path)
+    assert os.path.getsize(output_path) > 0

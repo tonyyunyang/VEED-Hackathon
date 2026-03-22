@@ -18,7 +18,7 @@ A video editing tool that detects faces in short clips (~10s), lets users select
 | Backend        | Python, FastAPI + Uvicorn                                    |
 | Face Tracking  | `movie-like-shots` via `face-detect-track` submodule         |
 | Face Detection | InsightFace (recognition, age/gender enrichment)             |
-| Face Swap      | Pluggable adapter (default: InsightFace inswapper)           |
+| Face Swap      | Pluggable backend (`insightface` or repo-local `facefusion-VEED`) |
 | Lipsync        | VEED Fabric 1.0 via fal.ai (optional, config-driven)         |
 | Video I/O      | FFmpeg                                                       |
 
@@ -51,6 +51,12 @@ brew install ffmpeg
 
 ### Backend
 
+This repo now supports two local backend setup styles:
+- `uv` + `server/.venv` for the existing workflow
+- `conda` + your own interpreter, which is useful when you want FaceFusion and the server to share one environment
+
+#### Option A: existing `uv` workflow
+
 ```bash
 cd server
 uv sync --all-groups
@@ -64,6 +70,20 @@ Notes:
 - `uv` resolves the local `movie-like-shots` dependency from `face-detect-track/`
 - the synced backend environment lives under `server/.venv`
 - the default tracker backend is `movie_like_shots` with `ocsort`
+
+#### Option B: shared `conda` env (`veed`)
+
+The repo contains a minimal `environment.yml` plus a bootstrap script that installs the shared backend stack into the active interpreter and verifies the local `facefusion-VEED` checkout in place.
+
+```bash
+conda env create -f environment.yml
+conda activate veed
+./scripts/bootstrap_veed_env.sh
+```
+
+`environment.yml` pins Python 3.11 because it is the safest cross-stack option for the tracker backend and the legacy InsightFace swap path. If you already have a `veed` env, skip the create step and just activate it before running the bootstrap script.
+
+The bootstrap script intentionally installs the shared backend dependency set through the local `server` package instead of blindly piping `facefusion-VEED/requirements.txt` into the same interpreter. That keeps one compatible environment for the tracker backend, the existing server, and the new FaceFusion swap runner, while still smoke-checking `facefusion-VEED/facefusion.py headless-run`.
 
 ### Frontend
 
@@ -82,6 +102,27 @@ DUMMY_TRACKING=false
 ```
 
 The tracker-related defaults in `.env.example` are already set to use the merged `movie_like_shots` pipeline.
+
+### FaceFusion Backend
+
+The server keeps the existing upload/detect/swap/download API contract and can now use `facefusion-VEED` as the swap backend under the hood.
+
+To enable it:
+
+```bash
+FACE_SWAPPER_BACKEND=facefusion
+FACEFUSION_DIR=facefusion-VEED
+```
+
+By default the FaceFusion runner uses the same Python interpreter that started the server. In a conda workflow that means it will use your active `veed` env automatically. If you want to force a specific interpreter, set `FACEFUSION_PYTHON`.
+
+When `FACE_SWAPPER_BACKEND=facefusion`, face metadata enrichment defaults off so the backend does not need to import InsightFace just to compute age/gender/embeddings. You can force it back on with `ENABLE_FACE_METADATA_ENRICHMENT=true` if your local environment supports InsightFace cleanly.
+
+FaceFusion still needs a source identity image. Provide one of:
+- `FACE_SWAP_REFERENCE_IMAGE=/absolute/path/to/source-face.jpg`
+- a local library under `server/reference_faces/male/` and `server/reference_faces/female/`
+
+If the reference library filenames include age ranges such as `20-29_actor.jpg`, the backend will prefer an age-matched file for the selected tracked face. If no reference image is configured, the server can fall back to the tracked face thumbnail when `FACE_SWAP_ALLOW_TARGET_THUMBNAIL_FALLBACK=true`, which is useful for smoke tests but not for meaningful identity replacement.
 
 ## Running
 
@@ -103,6 +144,14 @@ uv run uvicorn main:app --port 8000
 ```
 
 The normal runtime path is `uv` + `server/.venv`; there is no repo-level conda requirement.
+
+With a shared conda env, you can also run:
+
+```bash
+conda activate veed
+cd server
+python -m uvicorn main:app --port 8000
+```
 
 ## Testing
 

@@ -39,12 +39,21 @@ export async function detectFaces(
 
 export async function startSwap(
   videoId: string,
-  faceIds: string[]
+  faceIds: string[],
+  options?: {
+    startFrame?: number;
+    endFrame?: number;
+  },
 ): Promise<string> {
   const res = await fetch("/api/swap", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ video_id: videoId, face_ids: faceIds }),
+    body: JSON.stringify({
+      video_id: videoId,
+      face_ids: faceIds,
+      start_frame: options?.startFrame,
+      end_frame: options?.endFrame,
+    }),
   });
   if (!res.ok) throw new Error(`Swap failed: ${res.statusText}`);
   const data: SwapResponse = await res.json();

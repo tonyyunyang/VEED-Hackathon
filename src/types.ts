@@ -23,6 +23,10 @@ export interface StatusResponse {
   status: "processing" | "completed" | "failed";
   progress: number;
   error: string | null;
+  phase?: string | null;
+  message?: string | null;
+  completed_frames?: number | null;
+  total_frames?: number | null;
 }
 
 export type AppStep =

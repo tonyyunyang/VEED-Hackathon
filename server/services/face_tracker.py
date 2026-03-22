@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import base64
 import json
 import os
 import random
+import shutil
 import subprocess
 import sys
 from functools import lru_cache
@@ -11,10 +14,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from config import DUMMY_TRACKING
-
-if not DUMMY_TRACKING:
-    from insightface.app import FaceAnalysis
+from config import DUMMY_TRACKING, ENABLE_FACE_METADATA_ENRICHMENT
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TRACKER_SRC_DIR = REPO_ROOT / "face-detect-track" / "src"
@@ -74,6 +74,8 @@ def _resolve_face_analysis_execution(device: str, detector_size: int) -> tuple[l
 def _get_app():
     global _app
     if _app is None:
+        from insightface.app import FaceAnalysis
+
         providers, ctx_id = _resolve_face_analysis_execution(
             FACE_ANALYSIS_DEVICE,
             FACE_ANALYSIS_DET_SIZE,
@@ -339,7 +341,7 @@ def _extract_face_metadata(
     gender = "unknown"
     embedding: list[float] = [0.0] * 512
 
-    if crop.size > 0 and not DUMMY_TRACKING:
+    if crop.size > 0 and not DUMMY_TRACKING and ENABLE_FACE_METADATA_ENRICHMENT:
         faces = _get_app().get(crop)
         if faces:
             representative_face = max(
@@ -470,6 +472,8 @@ def extract_face_clips(
     faces_json: dict,
     selected_face_ids: list[str],
     output_base_dir: str,
+    start_frame: int | None = None,
+    end_frame: int | None = None,
 ) -> dict[str, dict]:
     """Extract per-face cropped frame sequences from full frames.
 
@@ -491,10 +495,24 @@ def extract_face_clips(
             )
             for frame_key, bbox in face_data.get("frames", {}).items()
         )
+        if start_frame is not None:
+            stored_frames = [
+                (frame_idx, bbox)
+                for frame_idx, bbox in stored_frames
+                if frame_idx >= start_frame
+            ]
+        if end_frame is not None:
+            stored_frames = [
+                (frame_idx, bbox)
+                for frame_idx, bbox in stored_frames
+                if frame_idx < end_frame
+            ]
         if not stored_frames:
             continue
 
         clip_dir = os.path.join(output_base_dir, face_id)
+        if os.path.exists(clip_dir):
+            shutil.rmtree(clip_dir)
         os.makedirs(clip_dir, exist_ok=True)
 
         per_frame_data: list[tuple[str, np.ndarray, list[float]]] = []
@@ -544,6 +562,7 @@ def extract_face_clips(
             "clip_dir": clip_dir,
             "crops": crops_manifest,
             "crop_size": (manifest_width, manifest_height),
+            "frame_count": len(crops_manifest),
         }
 
     return manifests

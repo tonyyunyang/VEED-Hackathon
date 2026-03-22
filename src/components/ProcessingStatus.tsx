@@ -32,7 +32,7 @@ export function ProcessingStatus({
       } catch {
         // Keep polling on transient errors
       }
-    }, 2000);
+    }, 1000);
 
     return () => clearInterval(interval);
   }, [jobId, status.status]);
@@ -80,17 +80,45 @@ export function ProcessingStatus({
   }
 
   const pct = Math.round(status.progress * 100);
+  const phaseLabel =
+    status.phase === "extracting_clips"
+      ? "Preparing clip"
+      : status.phase === "swapping"
+        ? "Swapping frames"
+        : status.phase === "compositing"
+          ? "Compositing frames"
+          : status.phase === "rendering"
+            ? "Rendering video"
+            : status.phase === "lipsync"
+              ? "Applying lipsync"
+              : "Processing";
+  const hasFrameProgress =
+    typeof status.completed_frames === "number" &&
+    typeof status.total_frames === "number" &&
+    status.total_frames > 0;
   return (
     <div className="flex flex-col items-center gap-6 w-full max-w-md">
       <Loader2 className="w-10 h-10 animate-spin text-primary" />
-      <p className="text-lg font-medium">Swapping faces...</p>
+      <div className="space-y-1 text-center">
+        <p className="text-lg font-medium">{phaseLabel}</p>
+        <p className="text-sm text-muted-foreground">
+          {status.message ?? "Working through the selected clip"}
+        </p>
+      </div>
       <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
         <div
           className="h-full bg-primary rounded-full transition-all duration-500"
           style={{ width: `${pct}%` }}
         />
       </div>
-      <p className="text-sm text-muted-foreground">{pct}% complete</p>
+      <div className="space-y-1 text-center">
+        <p className="text-sm text-muted-foreground">{pct}% complete</p>
+        {hasFrameProgress && (
+          <p className="text-xs text-muted-foreground">
+            {status.completed_frames}/{status.total_frames} frames
+          </p>
+        )}
+      </div>
     </div>
   );
 }

@@ -61,11 +61,14 @@ function App() {
     }
   };
 
-  const handleSwap = async (selectedIds: string[]) => {
+  const handleSwap = async (
+    selectedIds: string[],
+    frameWindow?: { startFrame: number; endFrame: number },
+  ) => {
     setIsSwapping(true);
     setError(null);
     try {
-      const jid = await startSwap(videoId, selectedIds);
+      const jid = await startSwap(videoId, selectedIds, frameWindow);
       setJobId(jid);
       setStep("processing");
     } catch (e) {

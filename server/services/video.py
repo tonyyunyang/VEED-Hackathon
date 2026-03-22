@@ -41,12 +41,36 @@ def extract_audio(video_path: str, output_path: str) -> bool:
     return result.returncode == 0
 
 
+def extract_audio_segment(
+    video_path: str, output_path: str, start_time: float, duration: float
+) -> bool:
+    cmd = [
+        "ffmpeg",
+        "-ss",
+        f"{max(0.0, start_time):.3f}",
+        "-t",
+        f"{max(0.0, duration):.3f}",
+        "-i",
+        video_path,
+        "-vn",
+        "-acodec",
+        "aac",
+        "-b:a",
+        "128k",
+        output_path,
+        "-y",
+    ]
+    result = subprocess.run(cmd, capture_output=True)
+    return result.returncode == 0
+
+
 def reassemble_video(
     frames_dir: str, audio_path: str | None, output_path: str, fps: float
 ) -> None:
     cmd = [
         "ffmpeg", "-framerate", str(fps),
         "-i", os.path.join(frames_dir, "frame_%04d.jpg"),
+        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
     ]
     if audio_path and os.path.exists(audio_path):
         cmd.extend(["-i", audio_path, "-c:a", "aac", "-shortest"])

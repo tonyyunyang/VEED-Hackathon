@@ -27,6 +27,8 @@ class DetectFacesResponse(BaseModel):
 class SwapRequest(BaseModel):
     video_id: str
     face_ids: list[str]
+    start_frame: int | None = None
+    end_frame: int | None = None
 
 
 class SwapResponse(BaseModel):
@@ -37,3 +39,7 @@ class StatusResponse(BaseModel):
     status: str
     progress: float
     error: str | None = None
+    phase: str | None = None
+    message: str | None = None
+    completed_frames: int | None = None
+    total_frames: int | None = None

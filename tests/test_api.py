@@ -152,3 +152,29 @@ def test_swap_without_detect():
         json={"video_id": video_id, "face_ids": ["face_0"]},
     )
     assert swap_resp.status_code == 400
+
+
+def test_status_response_includes_progress_metadata():
+    main.jobs["job123"] = {
+        "status": "processing",
+        "progress": 0.42,
+        "error": None,
+        "video_id": "video123",
+        "phase": "swapping",
+        "message": "Swapping face_0 (1/2)",
+        "completed_frames": 12,
+        "total_frames": 48,
+    }
+
+    response = client.get("/api/status/job123")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "processing",
+        "progress": 0.42,
+        "error": None,
+        "phase": "swapping",
+        "message": "Swapping face_0 (1/2)",
+        "completed_frames": 12,
+        "total_frames": 48,
+    }

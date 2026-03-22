@@ -24,13 +24,17 @@ __pycache__
 !.env.example
 server/.env
 server/venv
+server/*.egg-info
 server/storage
+server/reference_faces/*
+!server/reference_faces/.gitkeep
 server/test_swap_output
 .conda-envs/
 .conda-pkgs/
 .uv-cache/
 .tmp-npm-cache/
 .tmp-tracker-smoke/
+facefusion-VEED/
 
 *.af
 # Temporary Scratch Files
