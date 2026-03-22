@@ -17,6 +17,18 @@ import { ImageEditor } from "./components/ImageEditor";
 import { PartnerStrip } from "./components/PartnerStrip";
 import { Loader2, ArrowLeft } from "lucide-react";
 
+function demoMediaIdFromUrl(src: string): string | null {
+  const fileName = src.split("/").pop()?.split("?")[0];
+  if (!fileName?.endsWith(".mp4")) {
+    return null;
+  }
+  const demoId = fileName.slice(0, -4).trim().toLowerCase();
+  if (!demoId) {
+    return null;
+  }
+  return `demo_${demoId.replace(/-/g, "_")}`;
+}
+
 function App() {
   const [step, setStep] = useState<AppStep>("gallery");
   const [videoId, setVideoId] = useState("");
@@ -34,6 +46,8 @@ function App() {
   const uploadInFlightRef = useRef(false);
   const navigate = useNavigate();
   const location = useLocation();
+  const showMarketingHero =
+    location.pathname !== "/image-editor" && step !== "player";
 
   const clearUploadedPreview = () => {
     if (uploadedPreviewUrlRef.current) {
@@ -43,6 +57,10 @@ function App() {
   };
 
   useEffect(() => clearUploadedPreview, []);
+
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
 
   // Sync route and step state
   useEffect(() => {
@@ -127,18 +145,39 @@ function App() {
     try {
       setStep("detecting");
       navigate("/editor");
-      let file: File;
       if (typeof src === "string") {
+        const cachedMediaId = demoMediaIdFromUrl(src);
+        if (cachedMediaId) {
+          clearUploadedPreview();
+          setError(null);
+          setFaces([]);
+          setDetectionFps(0);
+          setJobId("");
+          setVideoId(cachedMediaId);
+          setSelectedVideoSrc(src);
+          try {
+            const detection = await detectFaces(cachedMediaId);
+            setDetectionFps(detection.fps);
+            setFaces(detection.faces);
+            setStep("player");
+            return;
+          } catch {
+            setVideoId("");
+          }
+        }
+
         const response = await fetch(src);
         const blob = await response.blob();
         const filename =
           src.split("/").pop()?.split("?")[0] || "demo-video.mp4";
-        file = new File([blob], filename, { type: blob.type || "video/mp4" });
-      } else {
-        file = src;
+        const file = new File([blob], filename, {
+          type: blob.type || "video/mp4",
+        });
+        await handleUpload(file);
+        return;
       }
 
-      await handleUpload(file);
+      await handleUpload(src);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load demo video");
       setStep("gallery");
@@ -162,7 +201,7 @@ function App() {
       <div className="pointer-events-none absolute bottom-0 left-1/3 h-80 w-80 rounded-full bg-orange-200/18 blur-3xl" />
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.46),transparent_34%,rgba(255,255,255,0.24)_68%,transparent)]" />
       <div className="relative z-10 flex w-full max-w-7xl flex-col items-center">
-        {step !== "player" && (
+        {showMarketingHero && (
           <div className="mb-10 grid w-full gap-6 rounded-[40px] border border-white/70 bg-white/68 p-6 shadow-[0_36px_110px_rgba(15,23,42,0.10)] backdrop-blur-2xl md:p-8 lg:grid-cols-[1.3fr_0.8fr] lg:items-center">
             <div>
               <div className="mb-4 inline-flex rounded-full border border-black/8 bg-white/78 px-4 py-1.5 text-[11px] font-semibold uppercase tracking-[0.3em] text-slate-500 shadow-[0_10px_30px_rgba(15,23,42,0.05)]">

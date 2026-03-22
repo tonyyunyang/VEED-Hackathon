@@ -228,6 +228,59 @@ def test_upload_and_detect_faces_for_image(monkeypatch, isolated_storage):
     assert os.path.exists(faces_json_path)
 
 
+def test_detect_faces_reuses_cached_analysis_artifacts(monkeypatch, isolated_storage):
+    media_id = "demo_party_10sec_preparation"
+    media_dir = os.path.join(main.STORAGE_DIR, media_id)
+    frames_dir = os.path.join(media_dir, "frames")
+    os.makedirs(frames_dir, exist_ok=True)
+
+    with open(os.path.join(media_dir, "original.mp4"), "wb") as f:
+        f.write(b"fake video")
+    with open(os.path.join(frames_dir, "frame_0001.jpg"), "wb") as f:
+        f.write(b"fake-frame")
+    with open(os.path.join(media_dir, "audio.aac"), "wb") as f:
+        f.write(b"fake-audio")
+    with open(os.path.join(media_dir, "faces.json"), "w", encoding="utf-8") as f:
+        f.write(
+            '{"fps": 24.0, "total_frames": 1, "width": 1280, "height": 720, "media_type": "video", '
+            '"faces": {"face_0": {"thumbnail": "data:image/jpeg;base64,ZmFrZQ==", "age": 34, '
+            '"gender": "male", "frame_count": 1, "frames": {"0": [10.0, 10.0, 20.0, 20.0]}}}}'
+        )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("Cached detect-faces should not rerun preprocessing")
+
+    monkeypatch.setattr(main.video, "extract_frames", fail_if_called)
+    monkeypatch.setattr(main.video, "extract_audio", fail_if_called)
+    monkeypatch.setattr(main.face_tracker, "detect_and_cluster", fail_if_called)
+
+    response = client.post(
+        "/api/detect-faces",
+        json={"media_id": media_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "video_id": media_id,
+        "media_id": media_id,
+        "media_type": "video",
+        "fps": 24.0,
+        "total_frames": 1,
+        "width": 1280,
+        "height": 720,
+        "faces": [
+            {
+                "face_id": "face_0",
+                "thumbnail": "data:image/jpeg;base64,ZmFrZQ==",
+                "age": 34,
+                "gender": "male",
+                "frame_count": 1,
+                "frames": {"0": [10.0, 10.0, 20.0, 20.0]},
+            }
+        ],
+    }
+
+
 def test_swap_without_detect():
     """Swap should fail if detect-faces hasn't been run."""
 
@@ -266,6 +319,65 @@ def test_swap_rejects_frame_trim_for_image(isolated_storage):
         },
     )
     assert swap_resp.status_code == 400
+
+
+def test_swap_returns_completed_job_when_cached_output_exists(monkeypatch, isolated_storage):
+    media_id = "demo_party_10sec_preparation"
+    media_dir = os.path.join(main.STORAGE_DIR, media_id)
+    frames_dir = os.path.join(media_dir, "frames")
+    cache_dir = os.path.join(media_dir, "swap_cache")
+    os.makedirs(frames_dir, exist_ok=True)
+    os.makedirs(cache_dir, exist_ok=True)
+
+    with open(os.path.join(media_dir, "original.mp4"), "wb") as f:
+        f.write(b"fake video")
+    with open(os.path.join(frames_dir, "frame_0001.jpg"), "wb") as f:
+        f.write(b"frame-1")
+    with open(os.path.join(frames_dir, "frame_0002.jpg"), "wb") as f:
+        f.write(b"frame-2")
+    with open(os.path.join(media_dir, "faces.json"), "w", encoding="utf-8") as f:
+        f.write(
+            '{"fps": 24.0, "total_frames": 2, "width": 1280, "height": 720, "media_type": "video", '
+            '"faces": {"face_0": {"thumbnail": "", "age": 0, "gender": "unknown", '
+            '"frame_count": 2, "frames": {"0": [0.0, 0.0, 1.0, 1.0], "1": [0.0, 0.0, 1.0, 1.0]}}}}'
+        )
+
+    request_payload = main._swap_cache_request_payload(
+        media_dir,
+        main.face_tracker.load_faces_json(os.path.join(media_dir, "faces.json")),
+        ["face_0"],
+        0,
+        2,
+        "",
+    )
+    cache_key = main._swap_cache_key(request_payload)
+    cached_output_path = os.path.join(cache_dir, f"{cache_key}.mp4")
+    with open(cached_output_path, "wb") as f:
+        f.write(b"cached-output")
+    with open(os.path.join(media_dir, main.SWAP_CACHE_METADATA_FILENAME), "w", encoding="utf-8") as f:
+        f.write(
+            '{"entries": {"%s": {"request": {}, "output_path": "%s", "output_filename": "swapped.mp4", '
+            '"media_type": "video", "output_media_type": "video/mp4", "warnings": []}}}'
+            % (cache_key, cached_output_path)
+        )
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("Cached swap should not schedule a new render")
+
+    monkeypatch.setattr(main.asyncio, "create_task", fail_if_called)
+
+    response = client.post(
+        "/api/swap",
+        json={"media_id": media_id, "face_ids": ["face_0"]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["media_id"] == media_id
+    status = client.get(f"/api/status/{payload['job_id']}")
+    assert status.status_code == 200
+    assert status.json()["status"] == "completed"
+    assert status.json()["output_filename"] == "swapped.mp4"
 
 
 def test_status_response_includes_progress_metadata():

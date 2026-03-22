@@ -285,7 +285,7 @@ export function ImageEditor() {
       ? `${detection.width} x ${detection.height}`
       : null;
   const referenceSetupPanel = (
-    <div className="mt-8 rounded-[24px] border border-white/70 bg-white/82 p-5 shadow-[0_20px_50px_rgba(15,23,42,0.08)]">
+    <div className="mt-8 rounded-[28px] border border-white/70 bg-[linear-gradient(135deg,rgba(255,255,255,0.92),rgba(244,247,255,0.96))] p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="max-w-2xl">
           <div className="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
@@ -307,8 +307,8 @@ export function ImageEditor() {
         </div>
       </div>
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-[0.92fr_1.08fr]">
-        <div className="rounded-[24px] border border-slate-200 bg-slate-50/90 p-5">
+      <div className="mt-6 grid gap-5 lg:grid-cols-[0.92fr_1.08fr]">
+        <div className="rounded-[24px] border border-slate-200/90 bg-white/88 p-5 shadow-[0_14px_32px_rgba(15,23,42,0.05)]">
           <div className="flex items-center gap-2 text-sm font-bold text-slate-900">
             <ImagePlus className="h-4 w-4 text-slate-700" />
             Reference image
@@ -352,7 +352,7 @@ export function ImageEditor() {
           </div>
         </div>
 
-        <div className="rounded-[24px] border border-slate-200 bg-slate-50/90 p-5">
+        <div className="rounded-[24px] border border-slate-200/90 bg-white/88 p-5 shadow-[0_14px_32px_rgba(15,23,42,0.05)]">
           <div className="flex items-center justify-between gap-3">
             <div className="text-sm font-bold text-slate-900">Runware style prompt</div>
             <div className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -446,8 +446,8 @@ export function ImageEditor() {
         </div>
       )}
 
-      <div className="grid gap-8 lg:grid-cols-[1.15fr_0.85fr]">
-        <div className="flex flex-col gap-4">
+      <div className="grid gap-8 xl:grid-cols-[1.15fr_0.85fr]">
+        <section className="flex flex-col gap-4 rounded-[28px] border border-white/70 bg-white/82 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.07)] md:p-6">
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="text-sm font-bold text-slate-900">Target image</div>
@@ -456,6 +456,11 @@ export function ImageEditor() {
                 face boxes directly to control the selection.
               </p>
             </div>
+            {faces.length > 0 && (
+              <div className="rounded-full border border-slate-200 bg-slate-50/90 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                {selectedFaceIdList.length}/{faces.length} selected
+              </div>
+            )}
             {selectedFile && (
               <button
                 onClick={() => inputRef.current?.click()}
@@ -542,9 +547,9 @@ export function ImageEditor() {
               </div>
             </button>
           )}
-        </div>
+        </section>
 
-        <div className="flex flex-col gap-4">
+        <section className="flex flex-col gap-4 rounded-[28px] border border-white/70 bg-white/82 p-5 shadow-[0_24px_60px_rgba(15,23,42,0.07)] md:p-6">
           <div>
             <div className="text-sm font-bold text-slate-900">Result</div>
             <p className="mt-1 text-sm text-slate-600">
@@ -643,95 +648,73 @@ export function ImageEditor() {
               </div>
             )}
           </div>
-        </div>
+        </section>
       </div>
 
       {referenceSetupPanel}
 
-      <div className="mt-8 flex flex-wrap items-center gap-3">
-        <button
-          onClick={() => inputRef.current?.click()}
-          disabled={showProcessing || isAnalyzing}
-          className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-5 py-3 text-sm font-semibold text-slate-700 transition-colors hover:text-slate-950"
-        >
-          <Upload className="h-4 w-4" />
-          {selectedFile ? "Choose another image" : "Choose image"}
-        </button>
+      <div className="mt-8 flex flex-wrap items-center justify-between gap-4 rounded-[24px] border border-white/70 bg-white/82 px-5 py-4 shadow-[0_20px_50px_rgba(15,23,42,0.06)]">
+        <div className="min-w-0">
+          <div className="text-sm font-bold text-slate-900">Editor actions</div>
+          <p className="mt-1 text-sm text-slate-600">
+            {selectedFile
+              ? faces.length > 0
+                ? `Detected ${faces.length} face${faces.length === 1 ? "" : "s"} and selected ${selectedFaceIdList.length}.`
+                : "Analyze the uploaded image to detect faces before swapping."
+              : "Choose a target image to start the still-image workflow."}
+          </p>
+        </div>
 
-        <button
-          onClick={handleAnalyze}
-          disabled={!selectedFile || isAnalyzing || isStartingSwap}
-          className="inline-flex items-center gap-2 rounded-full bg-[linear-gradient(135deg,#111827_0%,#2b344f_100%)] px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(15,23,42,0.16)] transition-transform hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-50"
-        >
-          {isAnalyzing ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <ScanFace className="h-4 w-4" />
-          )}
-          {faces.length > 0 ? "Re-analyze image" : "Upload and analyze image"}
-        </button>
-
-        <button
-          onClick={handleSwap}
-          disabled={
-            !mediaId ||
-            selectedFaceIdList.length === 0 ||
-            isAnalyzing ||
-            isStartingSwap ||
-            status?.status === "processing"
-          }
-          className="inline-flex items-center gap-2 rounded-full border border-slate-900 bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-50"
-        >
-          <Sparkles className="h-4 w-4" />
-          Swap {selectedFaceIdList.length || ""} {selectedFaceIdList.length === 1 ? "face" : "faces"}
-        </button>
-
-        {selectedFile && (
+        <div className="flex flex-wrap items-center gap-3">
           <button
-            onClick={resetEditor}
+            onClick={() => inputRef.current?.click()}
             disabled={showProcessing || isAnalyzing}
             className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-5 py-3 text-sm font-semibold text-slate-700 transition-colors hover:text-slate-950"
           >
-            <RefreshCcw className="h-4 w-4" />
-            Reset editor
+            <Upload className="h-4 w-4" />
+            {selectedFile ? "Choose another image" : "Choose image"}
           </button>
-        )}
-      </div>
 
-      {(selectedFile || faces.length > 0) && (
-        <div className="mt-8 flex flex-wrap gap-3 text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">
+          <button
+            onClick={handleAnalyze}
+            disabled={!selectedFile || isAnalyzing || isStartingSwap}
+            className="inline-flex items-center gap-2 rounded-full bg-[linear-gradient(135deg,#111827_0%,#2b344f_100%)] px-5 py-3 text-sm font-semibold text-white shadow-[0_12px_24px_rgba(15,23,42,0.16)] transition-transform hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-50"
+          >
+            {isAnalyzing ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <ScanFace className="h-4 w-4" />
+            )}
+            {faces.length > 0 ? "Re-analyze image" : "Upload and analyze image"}
+          </button>
+
+          <button
+            onClick={handleSwap}
+            disabled={
+              !mediaId ||
+              selectedFaceIdList.length === 0 ||
+              isAnalyzing ||
+              isStartingSwap ||
+              status?.status === "processing"
+            }
+            className="inline-flex items-center gap-2 rounded-full border border-slate-900 bg-slate-900 px-5 py-3 text-sm font-semibold text-white transition-transform hover:-translate-y-0.5 disabled:pointer-events-none disabled:opacity-50"
+          >
+            <Sparkles className="h-4 w-4" />
+            Swap {selectedFaceIdList.length || ""} {selectedFaceIdList.length === 1 ? "face" : "faces"}
+          </button>
+
           {selectedFile && (
-            <div className="rounded-full border border-slate-200 bg-white/88 px-3 py-1.5">
-              {selectedFile?.name ?? "target image"}
-            </div>
-          )}
-          {dimensionsLabel && (
-            <div className="rounded-full border border-slate-200 bg-white/88 px-3 py-1.5">
-              {dimensionsLabel}
-            </div>
-          )}
-          {detection && (
-            <div className="rounded-full border border-slate-200 bg-white/88 px-3 py-1.5">
-              {faces.length} faces detected
-            </div>
-          )}
-          {referenceFile && (
-            <div className="rounded-full border border-slate-200 bg-white/88 px-3 py-1.5">
-              Custom reference uploaded
-            </div>
-          )}
-          {!referenceFile && runwareRequested && (
-            <div className="rounded-full border border-slate-200 bg-white/88 px-3 py-1.5">
-              Runware requested
-            </div>
-          )}
-          {selectedFaceIdList.length > 0 && (
-            <div className="rounded-full border border-slate-200 bg-white/88 px-3 py-1.5">
-              {selectedFaceIdList.length} selected
-            </div>
+            <button
+              onClick={resetEditor}
+              disabled={showProcessing || isAnalyzing}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-white/90 px-5 py-3 text-sm font-semibold text-slate-700 transition-colors hover:text-slate-950"
+            >
+              <RefreshCcw className="h-4 w-4" />
+              Reset editor
+            </button>
           )}
         </div>
-      )}
+      </div>
 
       {detection && faces.length === 0 && (
         <div className="mt-8 rounded-[28px] border border-slate-200 bg-white/90 px-6 py-8 text-center shadow-[0_18px_42px_rgba(15,23,42,0.05)]">

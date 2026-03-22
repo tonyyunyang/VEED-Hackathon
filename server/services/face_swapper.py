@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -57,6 +58,10 @@ _STYLE_PROMPT_BLOCKED_PATTERNS = re.compile(
     r"javascript\s*:|data\s*:)",
     re.IGNORECASE,
 )
+_RUNWARE_API_URL = "https://api.runware.ai/v1"
+_RUNWARE_INITIAL_POLL_DELAY_SECONDS = 2.0
+_RUNWARE_MAX_POLL_DELAY_SECONDS = 8.0
+_RUNWARE_MAX_WAIT_SECONDS = 150.0
 
 
 def _sanitize_style_prompt(raw: str) -> str:
@@ -91,6 +96,64 @@ class ReferenceResolution:
     source_label: str | None = None
 
 
+def _runware_error_message(payload: dict[str, Any], task_uuid: str | None = None) -> str | None:
+    errors = payload.get("errors")
+    if not isinstance(errors, list):
+        return None
+
+    for item in errors:
+        if not isinstance(item, dict):
+            continue
+        if task_uuid and item.get("taskUUID") not in {None, task_uuid}:
+            continue
+        message = str(item.get("message") or item.get("code") or "Runware task failed")
+        code = str(item.get("code") or "").strip()
+        if code and code not in message:
+            return f"{code}: {message}"
+        return message
+    return None
+
+
+def _runware_image_url(payload: dict[str, Any], task_uuid: str) -> tuple[str | None, str]:
+    data = payload.get("data")
+    if not isinstance(data, list):
+        return None, "missing"
+
+    saw_matching_task = False
+    for item in data:
+        if not isinstance(item, dict) or item.get("taskUUID") != task_uuid:
+            continue
+        saw_matching_task = True
+        status = str(item.get("status") or "").strip().lower()
+        if item.get("imageURL"):
+            return str(item["imageURL"]), "ready"
+        if status in {"queued", "pending", "processing"}:
+            return None, "processing"
+        if status in {"success", "completed"}:
+            return None, "malformed"
+
+    if saw_matching_task:
+        return None, "malformed"
+    return None, "missing"
+
+
+def _post_runware_tasks(client: Any, tasks: list[dict[str, Any]]) -> dict[str, Any]:
+    response = client.post(_RUNWARE_API_URL, json=tasks)
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Runware returned a non-JSON response") from exc
+
+    if not isinstance(payload, dict):
+        raise RuntimeError("Runware returned an unexpected response payload")
+
+    if response.status_code >= 400:
+        detail = _runware_error_message(payload) or response.text.strip() or f"HTTP {response.status_code}"
+        raise RuntimeError(f"Runware HTTP {response.status_code}: {detail}")
+
+    return payload
+
+
 def _generate_face_runware(
     thumbnail_path: str,
     output_path: str,
@@ -101,21 +164,16 @@ def _generate_face_runware(
     """Generate a neutral replacement face via Runware img2img.
 
     Uses the detected face thumbnail as seed image and steers the generation
-    toward a neutral, demographically-consistent face.  Calls the Runware
-    WebSocket API directly (no SDK needed). Returns ``(path, error)``
-    where ``path`` is the generated image on success and ``error``
-    is a human-readable failure reason on fallback.
+    toward a neutral, demographically-consistent face. Calls Runware's
+    documented async image inference flow and polls until the image is ready.
+    Returns ``(path, error)`` where ``path`` is the generated image on success
+    and ``error`` is a human-readable failure reason on fallback.
     """
     if not RUNWARE_API_KEY:
         return None, "Runware API key is not configured on the server"
 
     try:
-        import json
-
         import httpx
-        import websockets.sync.client as ws_sync
-
-        RUNWARE_WS_URL = "wss://ws-api.runware.ai/v1"
 
         # Encode thumbnail as data URI
         with open(thumbnail_path, "rb") as f:
@@ -127,62 +185,82 @@ def _generate_face_runware(
         prompt = _build_runware_prompt(age, gender, style_prompt)
         logger.info("Runware prompt: %s", prompt)
 
-        task_uuid = uuid.uuid4().hex
+        task_uuid = str(uuid.uuid4())
+        request_payload = [{
+            "taskType": "imageInference",
+            "taskUUID": task_uuid,
+            "deliveryMethod": "async",
+            "model": "runware:101@1",
+            "positivePrompt": prompt,
+            "seedImage": seed_data_uri,
+            "strength": 0.55,
+            "width": 512,
+            "height": 512,
+            "steps": 30,
+            "numberResults": 1,
+            "outputType": "URL",
+            "outputFormat": "JPG",
+            "includeCost": True,
+        }]
 
-        with ws_sync.connect(RUNWARE_WS_URL, max_size=None, open_timeout=15) as conn:
-            # Authenticate
-            conn.send(json.dumps([{"taskType": "authentication", "apiKey": RUNWARE_API_KEY}]))
-            auth_resp = json.loads(conn.recv(timeout=15))
-            if isinstance(auth_resp, dict) and auth_resp.get("error"):
-                logger.warning("Runware auth failed: %s", auth_resp)
-                return None, str(auth_resp.get("error"))
-            if isinstance(auth_resp, list):
-                for item in auth_resp:
-                    if isinstance(item, dict) and item.get("error"):
-                        logger.warning("Runware auth failed: %s", item)
-                        return None, str(item.get("error"))
+        headers = {
+            "Authorization": f"Bearer {RUNWARE_API_KEY}",
+            "Content-Type": "application/json",
+        }
+        timeout = httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=30.0)
 
-            # Send image inference request
-            conn.send(json.dumps([{
-                "taskType": "imageInference",
-                "taskUUID": task_uuid,
-                "model": "runware:101@1",
-                "positivePrompt": prompt,
-                "seedImage": seed_data_uri,
-                "strength": 0.55,
-                "width": 512,
-                "height": 512,
-                "steps": 30,
-                "numberResults": 1,
-                "outputType": "URL",
-                "outputFormat": "JPG",
-            }]))
+        logger.info("Submitting Runware async imageInference task %s", task_uuid)
 
-            # Wait for result (poll messages until we get our task back)
-            image_url = None
-            for _ in range(60):  # up to ~60 recv calls
-                raw = conn.recv(timeout=60)
-                msg = json.loads(raw)
-                data_list = msg.get("data") if isinstance(msg, dict) else msg
-                if not isinstance(data_list, list):
-                    continue
-                for item in data_list:
-                    if item.get("taskUUID") == task_uuid and item.get("imageURL"):
-                        image_url = item["imageURL"]
-                        break
-                    if item.get("taskUUID") == task_uuid and item.get("error"):
-                        logger.warning("Runware task error: %s", item)
-                        return None, str(item.get("error"))
-                if image_url:
-                    break
+        with httpx.Client(headers=headers, timeout=timeout) as client:
+            submit_payload = _post_runware_tasks(client, request_payload)
+            submit_error = _runware_error_message(submit_payload, task_uuid)
+            if submit_error:
+                logger.warning("Runware submission failed for task %s: %s", task_uuid, submit_error)
+                return None, submit_error
 
-        if not image_url:
-            logger.warning("Runware: no image URL received")
-            return None, "Runware returned no generated image URL"
+            image_url, submit_state = _runware_image_url(submit_payload, task_uuid)
+            if submit_state == "malformed":
+                return None, "Runware returned a completed response without an image URL"
+            poll_delay = _RUNWARE_INITIAL_POLL_DELAY_SECONDS
+            deadline = time.monotonic() + _RUNWARE_MAX_WAIT_SECONDS
+            missing_poll_count = 0
 
-        # Download the generated image
-        Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with httpx.Client() as client:
+            while not image_url and time.monotonic() < deadline:
+                logger.info(
+                    "Polling Runware task %s for completion in %.1fs",
+                    task_uuid,
+                    poll_delay,
+                )
+                time.sleep(poll_delay)
+                poll_payload = _post_runware_tasks(
+                    client,
+                    [{"taskType": "getResponse", "taskUUID": task_uuid}],
+                )
+                poll_error = _runware_error_message(poll_payload, task_uuid)
+                if poll_error:
+                    logger.warning("Runware task %s failed: %s", task_uuid, poll_error)
+                    return None, poll_error
+                image_url, poll_state = _runware_image_url(poll_payload, task_uuid)
+                if poll_state == "malformed":
+                    return None, "Runware returned a completed response without an image URL"
+                if poll_state == "missing":
+                    missing_poll_count += 1
+                    if missing_poll_count >= 3:
+                        return None, (
+                            "Runware polling returned no data for the submitted task UUID"
+                        )
+                else:
+                    missing_poll_count = 0
+                poll_delay = min(poll_delay * 1.5, _RUNWARE_MAX_POLL_DELAY_SECONDS)
+
+            if not image_url:
+                logger.warning("Runware task %s timed out after %.1fs", task_uuid, _RUNWARE_MAX_WAIT_SECONDS)
+                return None, (
+                    "Runware image generation timed out while waiting for async task completion"
+                )
+
+            logger.info("Runware task %s completed, downloading generated image", task_uuid)
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             resp = client.get(image_url)
             resp.raise_for_status()
             with open(output_path, "wb") as out:
@@ -371,7 +449,16 @@ class ReferenceFaceResolver:
             return str(Path(video_dir) / uploaded_candidates[0])
 
         fallback_resolution = self._resolve_fallback(video_dir, face_id, face_data)
+        raw_style_prompt = self.style_prompt.strip()
         sanitized_style_prompt = _sanitize_style_prompt(self.style_prompt)
+
+        if raw_style_prompt and not sanitized_style_prompt:
+            if fallback_resolution.path:
+                self._record_warning(
+                    "Runware reference generation was skipped because the prompt was rejected "
+                    f"during sanitization. Falling back to {fallback_resolution.source_label}."
+                )
+            return fallback_resolution.path
 
         # 2. Runware AI face generation (img2img from the detected thumbnail) when requested
         thumbnail_name = face_data.get("thumbnail_path")

@@ -34,17 +34,27 @@ export function ProcessingStatus({
   useEffect(() => {
     if (status.status !== "processing") return;
 
-    const interval = setInterval(async () => {
+    let active = true;
+
+    const poll = async () => {
       try {
         const s = await getStatus(jobId);
+        if (!active) return;
         setStatus(s);
-        if (s.status !== "processing") clearInterval(interval);
       } catch {
         // Keep polling on transient errors
       }
+    };
+
+    void poll();
+    const interval = setInterval(() => {
+      void poll();
     }, 1000);
 
-    return () => clearInterval(interval);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
   }, [jobId, status.status]);
 
   if (status.status === "failed") {
