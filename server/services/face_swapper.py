@@ -181,14 +181,13 @@ def _generate_face_runware(
         logger.info("Runware: prompt → %s", prompt)
 
         task_uuid = str(uuid.uuid4())
+        # Text-to-image only — no seedImage; the prompt carries the demographics
         request_payload = [{
             "taskType": "imageInference",
             "taskUUID": task_uuid,
             "deliveryMethod": "async",
             "model": "runware:101@1",
             "positivePrompt": prompt,
-            "seedImage": seed_data_uri,
-            "strength": 0.55,
             "width": 512,
             "height": 512,
             "steps": 30,
@@ -496,7 +495,7 @@ class ReferenceFaceResolver:
                     f"Runware reference generation failed for {face_id}: {runware_error}. "
                     f"Falling back to {fallback_resolution.source_label}."
                 )
-            logger.info("[%s] Reference source: local library → %s", face_id, candidates)
+            logger.info("[%s] Reference source: fallback → %s", face_id, fallback_resolution.path)
             return fallback_resolution.path
 
         # 3. No requested generation, so use the configured fallback chain directly
