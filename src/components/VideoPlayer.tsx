@@ -1481,6 +1481,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ref={videoRef}
         src={videoSrc}
         className="hidden"
+        crossOrigin="anonymous"
         onLoadedMetadata={handleLoadedMetadata}
         onTimeUpdate={handleTimeUpdate}
         muted={false}
@@ -1490,6 +1491,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         ref={hiddenVideoRef}
         src={videoSrc}
         className="hidden"
+        crossOrigin="anonymous"
         preload="auto"
       />
 

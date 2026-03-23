@@ -18,6 +18,7 @@ export function MediaPreview({
       <img
         src={src}
         alt={alt}
+        crossOrigin="anonymous"
         className={`w-full rounded-xl bg-black object-contain max-h-[400px] ${className}`}
       />
     );
@@ -27,6 +28,7 @@ export function MediaPreview({
     <video
       src={src}
       controls
+      crossOrigin="anonymous"
       className={`w-full rounded-xl bg-black object-contain max-h-[400px] ${className}`}
     />
   );
