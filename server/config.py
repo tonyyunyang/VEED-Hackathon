@@ -113,6 +113,10 @@ FACEFUSION_OUTPUT_VIDEO_QUALITY = _env_int("FACEFUSION_OUTPUT_VIDEO_QUALITY", 90
 FACEFUSION_THREAD_COUNT = _env_int("FACEFUSION_THREAD_COUNT", 4)
 FACEFUSION_KEEP_INTERMEDIATES = _env_bool("FACEFUSION_KEEP_INTERMEDIATES", False)
 
+FACEFUSION_TIMEOUT_SECONDS = _env_int("FACEFUSION_TIMEOUT_SECONDS", 600)
+
+SWAP_JOB_TIMEOUT_SECONDS = _env_int("SWAP_JOB_TIMEOUT_SECONDS", 900)
+
 # Backward compatibility: keep the old dummy switch available, but default it
 # from the selected tracker backend so the backend choice is explicit.
 DUMMY_TRACKING = _env_bool("DUMMY_TRACKING", TRACKER_BACKEND == "dummy")

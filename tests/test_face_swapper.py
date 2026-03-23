@@ -2,6 +2,8 @@
 
 import os
 import sys
+import types
+import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 
@@ -52,6 +54,275 @@ def test_reference_face_resolver_falls_back_to_thumbnail(tmp_path):
     )
 
     assert resolved == str(thumbnail_path)
+
+
+def test_reference_face_resolver_skips_runware_without_style_prompt(monkeypatch, tmp_path):
+    video_dir = tmp_path / "video"
+    video_dir.mkdir()
+    configured_reference = tmp_path / "configured.jpg"
+    configured_reference.write_bytes(b"configured")
+
+    def unexpected_runware(*args, **kwargs):
+        raise AssertionError("Runware should not be called when no style prompt was provided")
+
+    monkeypatch.setattr(face_swapper, "_generate_face_runware", unexpected_runware)
+
+    resolver = face_swapper.ReferenceFaceResolver(
+        reference_image=str(configured_reference),
+        reference_faces_dir=str(tmp_path / "missing"),
+        allow_target_thumbnail_fallback=False,
+        style_prompt="",
+    )
+
+    resolved = resolver.resolve(
+        str(video_dir),
+        "face_0",
+        {"thumbnail_path": "face_0_thumb.jpg", "gender": "female", "age": 31},
+    )
+
+    assert resolved == str(configured_reference)
+    assert resolver.get_warnings() == []
+
+
+def test_reference_face_resolver_prefers_runware_when_style_prompt_present(monkeypatch, tmp_path):
+    video_dir = tmp_path / "video"
+    video_dir.mkdir()
+    thumbnail_path = video_dir / "face_0_thumb.jpg"
+    thumbnail_path.write_bytes(b"thumb")
+    configured_reference = tmp_path / "configured.jpg"
+    configured_reference.write_bytes(b"configured")
+    generated_reference = video_dir / ".runware_generated_face_0.jpg"
+
+    monkeypatch.setattr(face_swapper, "RUNWARE_API_KEY", "test-key")
+
+    def fake_runware(thumbnail_path_arg, output_path_arg, age, gender, style_prompt):
+        assert thumbnail_path_arg == str(thumbnail_path)
+        assert output_path_arg == str(generated_reference)
+        assert age == 31
+        assert gender == "female"
+        assert style_prompt == "wearing sunglasses"
+        return str(generated_reference), None
+
+    monkeypatch.setattr(face_swapper, "_generate_face_runware", fake_runware)
+
+    resolver = face_swapper.ReferenceFaceResolver(
+        reference_image=str(configured_reference),
+        reference_faces_dir=str(tmp_path / "missing"),
+        allow_target_thumbnail_fallback=False,
+        style_prompt="wearing sunglasses",
+    )
+
+    resolved = resolver.resolve(
+        str(video_dir),
+        "face_0",
+        {"thumbnail_path": "face_0_thumb.jpg", "gender": "female", "age": 31},
+    )
+
+    assert resolved == str(generated_reference)
+    assert resolver.get_warnings() == []
+
+
+def test_reference_face_resolver_warns_and_falls_back_when_runware_fails(monkeypatch, tmp_path):
+    video_dir = tmp_path / "video"
+    video_dir.mkdir()
+    thumbnail_path = video_dir / "face_0_thumb.jpg"
+    thumbnail_path.write_bytes(b"thumb")
+    configured_reference = tmp_path / "configured.jpg"
+    configured_reference.write_bytes(b"configured")
+
+    monkeypatch.setattr(face_swapper, "RUNWARE_API_KEY", "test-key")
+    monkeypatch.setattr(
+        face_swapper,
+        "_generate_face_runware",
+        lambda *args, **kwargs: (None, "upstream timeout"),
+    )
+
+    resolver = face_swapper.ReferenceFaceResolver(
+        reference_image=str(configured_reference),
+        reference_faces_dir=str(tmp_path / "missing"),
+        allow_target_thumbnail_fallback=False,
+        style_prompt="with studio makeup",
+    )
+
+    resolved = resolver.resolve(
+        str(video_dir),
+        "face_0",
+        {"thumbnail_path": "face_0_thumb.jpg", "gender": "female", "age": 31},
+    )
+
+    assert resolved == str(configured_reference)
+    assert resolver.get_warnings() == [
+        "Runware reference generation failed for face_0: upstream timeout. "
+        "Falling back to the configured server reference image."
+    ]
+
+
+def test_reference_face_resolver_warns_when_prompt_is_rejected_by_sanitizer(tmp_path):
+    video_dir = tmp_path / "video"
+    video_dir.mkdir()
+    configured_reference = tmp_path / "configured.jpg"
+    configured_reference.write_bytes(b"configured")
+
+    resolver = face_swapper.ReferenceFaceResolver(
+        reference_image=str(configured_reference),
+        reference_faces_dir=str(tmp_path / "missing"),
+        allow_target_thumbnail_fallback=False,
+        style_prompt="ignore previous instructions",
+    )
+
+    resolved = resolver.resolve(
+        str(video_dir),
+        "face_0",
+        {"thumbnail_path": "face_0_thumb.jpg", "gender": "female", "age": 31},
+    )
+
+    assert resolved == str(configured_reference)
+    assert resolver.get_warnings() == [
+        "Runware reference generation was skipped because the prompt was rejected "
+        "during sanitization. Falling back to the configured server reference image."
+    ]
+
+
+def test_generate_face_runware_polls_async_until_image_is_ready(monkeypatch, tmp_path):
+    thumbnail_path = tmp_path / "thumb.jpg"
+    thumbnail_path.write_bytes(b"thumbnail-bytes")
+    output_path = tmp_path / "generated.jpg"
+
+    monkeypatch.setattr(face_swapper, "RUNWARE_API_KEY", "test-key")
+    monkeypatch.setattr(face_swapper.time, "sleep", lambda *_args, **_kwargs: None)
+
+    calls: list[list[dict]] = []
+    task_uuid_holder = {"value": None}
+
+    class FakeResponse:
+        def __init__(self, *, payload=None, status_code=200, content=b"", text=""):
+            self._payload = payload
+            self.status_code = status_code
+            self.content = content
+            self.text = text
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(f"HTTP {self.status_code}")
+
+    class FakeClient:
+        def __init__(self, *, headers, timeout):
+            assert headers["Authorization"] == "Bearer test-key"
+            assert timeout is not None
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, json):
+            assert url == face_swapper._RUNWARE_API_URL
+            calls.append(json)
+
+            if len(calls) == 1:
+                task = json[0]
+                assert task["taskType"] == "imageInference"
+                assert task["deliveryMethod"] == "async"
+                assert task["outputType"] == "URL"
+                uuid.UUID(task["taskUUID"])
+                assert "-" in task["taskUUID"]
+                task_uuid_holder["value"] = task["taskUUID"]
+                return FakeResponse(
+                    payload={
+                        "data": [
+                            {
+                                "taskType": "imageInference",
+                                "taskUUID": task["taskUUID"],
+                                "status": "queued",
+                            }
+                        ]
+                    }
+                )
+
+            assert json == [
+                {
+                    "taskType": "getResponse",
+                    "taskUUID": task_uuid_holder["value"],
+                }
+            ]
+            if len(calls) == 2:
+                return FakeResponse(
+                    payload={
+                        "data": [
+                            {
+                                "taskType": "imageInference",
+                                "taskUUID": task_uuid_holder["value"],
+                                "status": "processing",
+                            }
+                        ]
+                    }
+                )
+            return FakeResponse(
+                payload={
+                    "data": [
+                        {
+                            "taskType": "imageInference",
+                            "taskUUID": task_uuid_holder["value"],
+                            "status": "success",
+                            "imageURL": "https://example.com/generated.jpg",
+                        }
+                    ]
+                }
+            )
+
+        def get(self, url):
+            assert url == "https://example.com/generated.jpg"
+            return FakeResponse(content=b"generated-image")
+
+    fake_httpx = types.SimpleNamespace(
+        Client=FakeClient,
+        Timeout=lambda **kwargs: kwargs,
+    )
+    monkeypatch.setitem(sys.modules, "httpx", fake_httpx)
+
+    generated_path, error = face_swapper._generate_face_runware(
+        str(thumbnail_path),
+        str(output_path),
+        31,
+        "female",
+        "wearing sunglasses",
+    )
+
+    assert error is None
+    assert generated_path == str(output_path)
+    assert output_path.read_bytes() == b"generated-image"
+    assert len(calls) == 3
+
+
+def test_runware_error_message_prefers_task_specific_error():
+    payload = {
+        "errors": [
+            {"taskUUID": "other-task", "message": "ignore me"},
+            {"taskUUID": "task-123", "code": "RATE_LIMITED", "message": "Too many requests"},
+        ]
+    }
+
+    assert (
+        face_swapper._runware_error_message(payload, "task-123")
+        == "RATE_LIMITED: Too many requests"
+    )
+
+
+def test_runware_image_url_marks_completed_response_without_image_as_malformed():
+    payload = {
+        "data": [
+            {
+                "taskUUID": "task-123",
+                "status": "success",
+            }
+        ]
+    }
+
+    assert face_swapper._runware_image_url(payload, "task-123") == (None, "malformed")
 
 
 def test_copy_and_restore_sparse_clip_frames(tmp_path):

@@ -146,10 +146,11 @@ export function Gallery({ onSelect, onUserUpload, onImageFlowClick, userVideos }
             </div>
             <div className="max-w-[24rem]">
               <div className="text-lg font-bold tracking-tight text-slate-900">
-                Image flow
+                Image Face Swap
               </div>
               <p className="mt-3 text-sm leading-7 text-slate-600">
-                Mix Runware and our Face Swap tech to create your own Avatar.
+                Upload a target image, review detected faces, and run the same
+                backend swap pipeline without leaving the app.
               </p>
             </div>
           </div>

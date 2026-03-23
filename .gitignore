@@ -34,6 +34,8 @@ server/test_swap_output
 .uv-cache/
 .tmp-npm-cache/
 .tmp-tracker-smoke/
+.npm-cache/
+.pytest-cache/
 
 *.af
 # Temporary Scratch Files
