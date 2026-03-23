@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import demoVideoData from "../assets/insightface_video_data.json";
 import type { BoundingBox, FaceInfo } from "../types";
 import { Button } from "./ui/button";
@@ -211,7 +217,12 @@ const traceRoundedRect = (
   ctx.lineTo(x + width - safeRadius, y);
   ctx.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
   ctx.lineTo(x + width, y + height - safeRadius);
-  ctx.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
+  ctx.quadraticCurveTo(
+    x + width,
+    y + height,
+    x + width - safeRadius,
+    y + height,
+  );
   ctx.lineTo(x + safeRadius, y + height);
   ctx.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
   ctx.lineTo(x, y + safeRadius);
@@ -368,13 +379,13 @@ const buildTrackingDataFromFaces = (
   const frames: Record<string, TrackingEntry[]> = {};
 
   faces.forEach((face) => {
-    Object.entries(face.frames).forEach(([frameIndex, bbox]) => {
+    Object.entries(face.frames).forEach(([frameIndex, frameData]) => {
       frames[frameIndex] ??= [];
       frames[frameIndex].push({
         id: face.face_id,
         label: face.face_id,
-        bbox,
-        det_score: 1,
+        bbox: frameData.bbox,
+        det_score: frameData.det_score,
       });
     });
   });
@@ -390,12 +401,14 @@ const normalizeDemoTrackingData = (): TrackingDataset => ({
   frames: Object.fromEntries(
     Object.entries(demoVideoData.frames).map(([frameIndex, people]) => [
       frameIndex,
-      (people as Array<{
-        id: number;
-        label: string;
-        bbox: BoundingBox;
-        det_score?: number;
-      }>).map((person) => ({
+      (
+        people as Array<{
+          id: number;
+          label: string;
+          bbox: BoundingBox;
+          det_score?: number;
+        }>
+      ).map((person) => ({
         id: String(person.id),
         label: person.label,
         bbox: person.bbox,
@@ -507,9 +520,7 @@ const SelectionTimelineEditor = ({
           break;
         }
         case "playhead": {
-          onScrub(
-            Math.min(selection[1], Math.max(selection[0], pointerTime)),
-          );
+          onScrub(Math.min(selection[1], Math.max(selection[0], pointerTime)));
           break;
         }
       }
@@ -547,7 +558,9 @@ const SelectionTimelineEditor = ({
       };
     };
 
-  const handleTrackPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+  const handleTrackPointerDown = (
+    event: React.PointerEvent<HTMLDivElement>,
+  ) => {
     if (duration <= 0) return;
 
     event.preventDefault();
@@ -561,8 +574,10 @@ const SelectionTimelineEditor = ({
     };
   };
 
-  const selectionStartPercent = duration > 0 ? (selection[0] / duration) * 100 : 0;
-  const selectionEndPercent = duration > 0 ? (selection[1] / duration) * 100 : 100;
+  const selectionStartPercent =
+    duration > 0 ? (selection[0] / duration) * 100 : 0;
+  const selectionEndPercent =
+    duration > 0 ? (selection[1] / duration) * 100 : 100;
   const selectionWidthPercent = Math.max(
     0,
     selectionEndPercent - selectionStartPercent,
@@ -578,7 +593,10 @@ const SelectionTimelineEditor = ({
     >
       <div className="absolute inset-2 flex gap-1.5 overflow-hidden rounded-[18px]">
         {keyframes.map((src, index) => (
-          <div key={index} className="relative h-full flex-1 overflow-hidden rounded-[14px]">
+          <div
+            key={index}
+            className="relative h-full flex-1 overflow-hidden rounded-[14px]"
+          >
             <img
               src={src}
               className="h-full w-full object-cover saturate-[0.92]"
@@ -688,7 +706,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [selectedPersonIds, setSelectedPersonIds] = useState<PersonId[]>([]);
   const [appliedSelectedIds, setAppliedSelectedIds] = useState<PersonId[]>([]);
   const [hoveredPersonId, setHoveredPersonId] = useState<PersonId | null>(null);
-  const [hasFaceSelectionConfigured, setHasFaceSelectionConfigured] = useState(false);
+  const [hasFaceSelectionConfigured, setHasFaceSelectionConfigured] =
+    useState(false);
   const [facePanelPosition, setFacePanelPosition] = useState({ x: 24, y: 118 });
   const [showSwapOptions, setShowSwapOptions] = useState(false);
   const [stylePrompt, setStylePrompt] = useState("");
@@ -710,7 +729,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   );
 
   const trackingData = useMemo(
-    () => (useLiveTracking ? buildTrackingDataFromFaces(faces, fps) : normalizeDemoTrackingData()),
+    () =>
+      useLiveTracking
+        ? buildTrackingDataFromFaces(faces, fps)
+        : normalizeDemoTrackingData(),
     [faces, fps, useLiveTracking],
   );
   const clipDuration = Math.max(0, endTime - startTime);
@@ -728,7 +750,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const personMetaData = useMemo<PersonMeta[]>(() => {
     const people: Record<
       PersonId,
-      Omit<PersonMeta, "color" | "thumbnailSrc" | "age" | "gender" | "frameCount">
+      Omit<
+        PersonMeta,
+        "color" | "thumbnailSrc" | "age" | "gender" | "frameCount"
+      >
     > = {};
     const sortedFrames = Object.keys(trackingData.frames)
       .map(Number)
@@ -796,7 +821,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     () =>
       personMetaData.filter(
         (person) =>
-          person.firstFrame <= clipEndFrame && person.lastFrame >= clipStartFrame,
+          person.firstFrame <= clipEndFrame &&
+          person.lastFrame >= clipStartFrame,
       ),
     [personMetaData, clipStartFrame, clipEndFrame],
   );
@@ -814,9 +840,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [personMetaData],
   );
 
-  const thumbnailCanvasesRef = useRef<Record<PersonId, HTMLCanvasElement | null>>(
-    {},
-  );
+  const thumbnailCanvasesRef = useRef<
+    Record<PersonId, HTMLCanvasElement | null>
+  >({});
   const hiddenVideoRef = useRef<HTMLVideoElement>(null);
 
   const generateThumbnails = async () => {
@@ -829,7 +855,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       const canvas = thumbnailCanvasesRef.current[person.id];
       if (!canvas) continue;
 
-      const time = person.bestFrameIndex / Math.max(trackingData.video_metadata.fps, 1);
+      const time =
+        person.bestFrameIndex / Math.max(trackingData.video_metadata.fps, 1);
       video.currentTime = time;
 
       await new Promise((resolve) => {
@@ -906,17 +933,26 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const panelWidth = 380;
     const panelHeight = Math.min(window.innerHeight - 40, 640);
     return {
-      x: Math.min(Math.max(16, x), Math.max(16, window.innerWidth - panelWidth - 16)),
-      y: Math.min(Math.max(16, y), Math.max(16, window.innerHeight - panelHeight - 16)),
+      x: Math.min(
+        Math.max(16, x),
+        Math.max(16, window.innerWidth - panelWidth - 16),
+      ),
+      y: Math.min(
+        Math.max(16, y),
+        Math.max(16, window.innerHeight - panelHeight - 16),
+      ),
     };
   };
 
-  const syncHoveredPerson = useCallback((nextHoveredPersonId: PersonId | null) => {
-    hoveredPersonIdRef.current = nextHoveredPersonId;
-    setHoveredPersonId((previous) =>
-      previous === nextHoveredPersonId ? previous : nextHoveredPersonId,
-    );
-  }, []);
+  const syncHoveredPerson = useCallback(
+    (nextHoveredPersonId: PersonId | null) => {
+      hoveredPersonIdRef.current = nextHoveredPersonId;
+      setHoveredPersonId((previous) =>
+        previous === nextHoveredPersonId ? previous : nextHoveredPersonId,
+      );
+    },
+    [],
+  );
 
   const getCanvasPoint = useCallback(
     (
@@ -947,12 +983,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
       if (!point) {
         return null;
       }
-      return getOverlayRegionAtPoint(overlayRegionsRef.current, point.x, point.y);
+      return getOverlayRegionAtPoint(
+        overlayRegionsRef.current,
+        point.x,
+        point.y,
+      );
     },
     [],
   );
 
-  const handleCanvasPointerMove = (event: React.PointerEvent<HTMLCanvasElement>) => {
+  const handleCanvasPointerMove = (
+    event: React.PointerEvent<HTMLCanvasElement>,
+  ) => {
     if (!canInteractWithStageFaces) {
       return;
     }
@@ -1007,7 +1049,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   }, [faceControlMode, visiblePersonMetaData, trackingData.video_metadata.fps]);
 
   useEffect(() => {
-    const visibleIds = new Set(visiblePersonMetaData.map((person) => person.id));
+    const visibleIds = new Set(
+      visiblePersonMetaData.map((person) => person.id),
+    );
     setSelectedPersonIds((prev) => prev.filter((id) => visibleIds.has(id)));
     setAppliedSelectedIds((prev) => prev.filter((id) => visibleIds.has(id)));
   }, [visiblePersonMetaData]);
@@ -1095,7 +1139,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         const currentFrame = Math.round(
           video.currentTime * Math.max(trackingData.video_metadata.fps, 1),
         );
-        const frameData = getTrackingEntriesForFrame(trackingData, currentFrame);
+        const frameData = getTrackingEntriesForFrame(
+          trackingData,
+          currentFrame,
+        );
         const overlayRegions: OverlayRegion[] = [];
 
         if (frameData.length > 0) {
@@ -1141,7 +1188,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           if ((hoveredRegion?.id ?? null) !== hoveredPersonIdRef.current) {
             syncHoveredPerson(hoveredRegion?.id ?? null);
           }
-        } else if (overlayRegions.length === 0 && hoveredPersonIdRef.current !== null) {
+        } else if (
+          overlayRegions.length === 0 &&
+          hoveredPersonIdRef.current !== null
+        ) {
           syncHoveredPerson(null);
         }
       }
@@ -1212,7 +1262,9 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     syncHoveredPerson(null);
   }, [canInteractWithStageFaces, hoveredPersonId, syncHoveredPerson]);
 
-  const handleReferenceFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleReferenceFileChange = (
+    e: React.ChangeEvent<HTMLInputElement>,
+  ) => {
     const file = e.target.files?.[0];
     if (!file) return;
     setReferenceFile(file);
@@ -1589,506 +1641,536 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
           </div>
         </div>
 
-      {faceControlMode && (
-        <div
-          className="absolute z-30 w-[360px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-[28px] border border-white/80 bg-white/84 shadow-[0_32px_90px_rgba(15,23,42,0.16)] backdrop-blur-2xl"
-          style={{
-            left: facePanelPosition.x,
-            top: facePanelPosition.y,
-          }}
-        >
+        {faceControlMode && (
           <div
-            onPointerDown={handleFacePanelPointerDown}
-            className="flex cursor-move items-center justify-between border-b border-slate-200 px-4 py-3"
+            className="absolute z-30 w-[360px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-[28px] border border-white/80 bg-white/84 shadow-[0_32px_90px_rgba(15,23,42,0.16)] backdrop-blur-2xl"
+            style={{
+              left: facePanelPosition.x,
+              top: facePanelPosition.y,
+            }}
           >
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
-              <GripHorizontal className="h-4 w-4 text-slate-400" />
-              Face picker
-            </div>
-            <button
-              onClick={() => setFaceControlMode(false)}
-              className="rounded-full p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900"
+            <div
+              onPointerDown={handleFacePanelPointerDown}
+              className="flex cursor-move items-center justify-between border-b border-slate-200 px-4 py-3"
             >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between px-4 py-3 text-xs text-slate-500">
-            <span>
-              Click faces here or directly on the video to include them in the swap.
-            </span>
-            <span>{selectedPersonIds.length} selected</span>
-          </div>
-
-          <div className="max-h-[52vh] overflow-y-auto px-4 pb-4">
-            {visiblePersonMetaData.length === 0 ? (
-                  <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
-                    No tracked faces overlap this trimmed range.
-                  </div>
-                ) : (
-              <div className="grid grid-cols-3 gap-3">
-                {visiblePersonMetaData.map((person) => {
-                  const isSelected = selectedPersonIds.includes(person.id);
-                  const isHovered = hoveredPersonId === person.id;
-                  return (
-                    <button
-                      key={person.id}
-                      onClick={() => togglePersonSelection(person.id)}
-                      onFocus={() => syncHoveredPerson(person.id)}
-                      onBlur={() => syncHoveredPerson(null)}
-                      onPointerEnter={() => syncHoveredPerson(person.id)}
-                      onPointerLeave={() => syncHoveredPerson(null)}
-                      className="group text-left"
-                    >
-                      <div
-                        className={`relative overflow-hidden rounded-2xl border-2 transition-all ${
-                          isSelected
-                            ? "scale-[1.02] shadow-[0_12px_32px_rgba(15,23,42,0.14)]"
-                            : isHovered
-                              ? "scale-[1.01] opacity-100"
-                              : "border-slate-200 opacity-72 hover:opacity-100"
-                        }`}
-                        style={{
-                          borderColor:
-                            isSelected || isHovered ? person.color : undefined,
-                          boxShadow: isSelected
-                            ? `0 14px 32px -18px ${person.color}`
-                            : isHovered
-                              ? `0 12px 26px -20px ${person.color}`
-                              : undefined,
-                        }}
-                      >
-                        <div className="aspect-square bg-slate-950">
-                          {person.thumbnailSrc ? (
-                            <img
-                              src={person.thumbnailSrc}
-                              alt={person.label}
-                              className="h-full w-full object-cover"
-                            />
-                          ) : (
-                            <canvas
-                              ref={(el) => {
-                                thumbnailCanvasesRef.current[person.id] = el;
-                              }}
-                              width={96}
-                              height={96}
-                              className="h-full w-full object-cover"
-                            />
-                          )}
-                        </div>
-                        <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-2">
-                          <div className="flex items-center justify-between gap-2">
-                            <span
-                              className="rounded-full px-2 py-0.5 text-[10px] font-bold text-white"
-                              style={{ backgroundColor: person.color }}
-                            >
-                              {person.label}
-                            </span>
-                            {person.frameCount !== undefined && (
-                              <span className="text-[10px] font-medium text-white/70">
-                                {person.frameCount}f
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {isSelected && (
-                          <div className="absolute right-2 top-2 rounded-full bg-slate-950 p-1 text-white shadow-lg">
-                            <Check className="h-3.5 w-3.5" />
-                          </div>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
-            <div className="flex w-full items-center justify-between gap-3">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={handleSelectAllFaces}
-                disabled={visiblePersonMetaData.length === 0}
-                className="text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-              >
-                {allVisibleFacesSelected ? "Deselect all" : "Select all"}
-              </Button>
-              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
-                Selection updates live
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {showSwapOptions && (
-        <div className="absolute left-1/2 top-1/2 z-40 w-[420px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 animate-in fade-in zoom-in-95 duration-200">
-          <div className="overflow-hidden rounded-[28px] border border-white/80 bg-white/92 shadow-[0_40px_120px_rgba(15,23,42,0.22)] backdrop-blur-2xl">
-            {/* Header */}
-            <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
-              <div className="flex items-center gap-2.5">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-[0_4px_12px_rgba(124,58,237,0.3)]">
-                  <Wand2 className="h-4 w-4" />
-                </div>
-                <div>
-                  <h3 className="text-[15px] font-bold text-slate-900">Swap Options</h3>
-                  <p className="text-[11px] text-slate-500">{appliedFaceCount} face{appliedFaceCount === 1 ? "" : "s"} selected</p>
-                </div>
+              <div className="flex items-center gap-2 text-sm font-semibold text-slate-900">
+                <GripHorizontal className="h-4 w-4 text-slate-400" />
+                Face picker
               </div>
               <button
-                onClick={() => setShowSwapOptions(false)}
+                onClick={() => setFaceControlMode(false)}
                 className="rounded-full p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900"
               >
                 <X className="h-4 w-4" />
               </button>
             </div>
 
-            <div className="space-y-4 p-5">
-              {/* Option 1: Upload Reference Image */}
-              <div className="group rounded-2xl border border-slate-200 bg-slate-50/60 p-4 transition-all hover:border-violet-200 hover:bg-violet-50/40">
-                <div className="mb-3 flex items-center gap-2">
-                  <ImagePlus className="h-4 w-4 text-violet-600" />
-                  <span className="text-[13px] font-semibold text-slate-800">Reference Face</span>
-                  <span className="ml-auto rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-violet-600">
-                    Highest priority
-                  </span>
-                </div>
-                <p className="mb-3 text-[12px] leading-relaxed text-slate-500">
-                  Upload a photo of the face you want to swap in. This overrides all other sources.
-                </p>
+            <div className="flex items-center justify-between px-4 py-3 text-xs text-slate-500">
+              <span>
+                Click faces here or directly on the video to include them in the
+                swap.
+              </span>
+              <span>{selectedPersonIds.length} selected</span>
+            </div>
 
-                {referencePreview ? (
-                  <div className="flex items-center gap-3">
-                    <div className="relative h-16 w-16 overflow-hidden rounded-xl border-2 border-violet-300 shadow-[0_4px_16px_rgba(124,58,237,0.15)]">
-                      <img src={referencePreview} alt="Reference" className="h-full w-full object-cover" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="truncate text-[12px] font-medium text-slate-700">{referenceFile?.name}</p>
+            <div className="max-h-[52vh] overflow-y-auto px-4 pb-4">
+              {visiblePersonMetaData.length === 0 ? (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-10 text-center text-sm text-slate-500">
+                  No tracked faces overlap this trimmed range.
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-3">
+                  {visiblePersonMetaData.map((person) => {
+                    const isSelected = selectedPersonIds.includes(person.id);
+                    const isHovered = hoveredPersonId === person.id;
+                    return (
                       <button
-                        onClick={clearReference}
-                        className="mt-1 text-[11px] font-medium text-red-500 transition-colors hover:text-red-700"
+                        key={person.id}
+                        onClick={() => togglePersonSelection(person.id)}
+                        onFocus={() => syncHoveredPerson(person.id)}
+                        onBlur={() => syncHoveredPerson(null)}
+                        onPointerEnter={() => syncHoveredPerson(person.id)}
+                        onPointerLeave={() => syncHoveredPerson(null)}
+                        className="group text-left"
                       >
-                        Remove
+                        <div
+                          className={`relative overflow-hidden rounded-2xl border-2 transition-all ${
+                            isSelected
+                              ? "scale-[1.02] shadow-[0_12px_32px_rgba(15,23,42,0.14)]"
+                              : isHovered
+                                ? "scale-[1.01] opacity-100"
+                                : "border-slate-200 opacity-72 hover:opacity-100"
+                          }`}
+                          style={{
+                            borderColor:
+                              isSelected || isHovered
+                                ? person.color
+                                : undefined,
+                            boxShadow: isSelected
+                              ? `0 14px 32px -18px ${person.color}`
+                              : isHovered
+                                ? `0 12px 26px -20px ${person.color}`
+                                : undefined,
+                          }}
+                        >
+                          <div className="aspect-square bg-slate-950">
+                            {person.thumbnailSrc ? (
+                              <img
+                                src={person.thumbnailSrc}
+                                alt={person.label}
+                                className="h-full w-full object-cover"
+                              />
+                            ) : (
+                              <canvas
+                                ref={(el) => {
+                                  thumbnailCanvasesRef.current[person.id] = el;
+                                }}
+                                width={96}
+                                height={96}
+                                className="h-full w-full object-cover"
+                              />
+                            )}
+                          </div>
+                          <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/80 to-transparent px-2 py-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <span
+                                className="rounded-full px-2 py-0.5 text-[10px] font-bold text-white"
+                                style={{ backgroundColor: person.color }}
+                              >
+                                {person.label}
+                              </span>
+                              {person.frameCount !== undefined && (
+                                <span className="text-[10px] font-medium text-white/70">
+                                  {person.frameCount}f
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          {isSelected && (
+                            <div className="absolute right-2 top-2 rounded-full bg-slate-950 p-1 text-white shadow-lg">
+                              <Check className="h-3.5 w-3.5" />
+                            </div>
+                          )}
+                        </div>
                       </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => referenceInputRef.current?.click()}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 py-3 text-[12px] font-medium text-slate-500 transition-all hover:border-violet-400 hover:bg-violet-50 hover:text-violet-700"
-                  >
-                    <Upload className="h-3.5 w-3.5" />
-                    Choose image
-                  </button>
-                )}
-                <input
-                  ref={referenceInputRef}
-                  type="file"
-                  accept=".jpg,.jpeg,.png,.webp"
-                  onChange={handleReferenceFileChange}
-                  className="hidden"
-                />
-              </div>
-
-              {/* Option 2: Style Prompt */}
-              <div className="group rounded-2xl border border-slate-200 bg-slate-50/60 p-4 transition-all hover:border-amber-200 hover:bg-amber-50/30">
-                <div className="mb-3 flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-amber-600" />
-                  <span className="text-[13px] font-semibold text-slate-800">AI Style</span>
-                  <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700">
-                    AI generated
-                  </span>
+                    );
+                  })}
                 </div>
-                <p className="mb-3 text-[12px] leading-relaxed text-slate-500">
-                  Describe accessories or styles for a Runware-generated face. Only applies when no reference image is provided, and falls back if generation is unavailable.
-                </p>
-                <input
-                  type="text"
-                  value={stylePrompt}
-                  onChange={(e) => setStylePrompt(e.target.value)}
-                  placeholder="e.g. wearing sunglasses, with face paint..."
-                  maxLength={200}
-                  className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-[13px] text-slate-800 placeholder:text-slate-400 transition-all focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-100"
-                />
-                <div className="mt-1.5 text-right text-[10px] text-slate-400">{stylePrompt.length}/200</div>
-                <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
-                  Requires server-side Runware API configuration. If generation fails, the swap will continue with the configured fallback reference.
-                </p>
-              </div>
-
-              {/* Divider hint */}
-              {!referenceFile && !stylePrompt && (
-                <p className="text-center text-[11px] text-slate-400">
-                  Leave both empty to use the configured fallback reference
-                </p>
               )}
             </div>
 
-            {/* Footer */}
-            <div className="flex items-center gap-3 border-t border-slate-200 px-5 py-4">
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setShowSwapOptions(false)}
-                className="flex-1 text-slate-600 hover:bg-slate-100"
-              >
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleConfirmSwap}
-                disabled={isSwapping}
-                className="flex-1 bg-gradient-to-r from-slate-900 to-slate-800 font-semibold text-white shadow-[0_4px_16px_rgba(15,23,42,0.2)] transition-all hover:from-slate-800 hover:to-slate-700 active:scale-[0.98] disabled:from-slate-300 disabled:to-slate-300"
-              >
-                <SmilePlus className="mr-2 h-4 w-4" />
-                {isSwapping ? "Starting..." : `Swap ${appliedFaceCount} Face${appliedFaceCount === 1 ? "" : "s"}`}
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div
-        className={`mx-auto w-full shrink-0 px-2 transition-all duration-300 ${
-          selectionMode ? "max-w-6xl pt-2" : "mt-auto max-w-5xl"
-        }`}
-      >
-        <TooltipProvider>
-          <Toolbar
-            className="rounded-[30px] border border-white/80 bg-white/80 p-4 shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur-2xl"
-          >
-            {selectionMode ? (
-              <div className="flex flex-col gap-6 w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <div className="flex justify-between items-center">
-                  <div>
-                    <h3 className="text-lg font-black text-slate-950">
-                      Edit timeframe
-                    </h3>
-                    <p className="mt-1 text-sm text-slate-600">
-                      Drag the handles to resize the range, drag the highlighted
-                      band to move the whole selection, or scrub the playhead for
-                      frame-accurate preview.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <Button
-                      size="sm"
-                      variant="secondary"
-                      onClick={togglePlay}
-                      className="border border-slate-200 bg-white text-slate-900 hover:bg-slate-50"
-                    >
-                      {playing ? (
-                        <Pause className="mr-2 h-4 w-4" />
-                      ) : (
-                        <Play className="mr-2 h-4 w-4" />
-                      )}
-                      Preview selection
-                    </Button>
-                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-mono font-semibold text-slate-700">
-                      {Math.max(0, currentTime - tempSelection[0]).toFixed(2)}s
-                      <span className="mx-1 text-slate-300">/</span>
-                      {(tempSelection[1] - tempSelection[0]).toFixed(2)}s
-                    </div>
-                  </div>
-                </div>
-
-                <SelectionTimelineEditor
-                  currentTime={selectionCurrentTime}
-                  duration={duration}
-                  keyframes={keyframes}
-                  onScrub={seekToTime}
-                  onSelectionChange={handleTempSelectionChange}
-                  selection={tempSelection}
-                />
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
-                      Range {tempSelection[0].toFixed(2)}s — {tempSelection[1].toFixed(2)}s
-                    </div>
-                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
-                      Preview {Math.max(0, currentTime - tempSelection[0]).toFixed(2)}s / {selectionDuration.toFixed(2)}s
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
-                      The selected band is draggable now. Playhead scrubbing and
-                      range movement are handled separately so they no longer
-                      fight each other.
-                    </div>
-                    <div className="flex items-center gap-3">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setSelectionMode(false);
-                          setPlaying(false);
-                          videoRef.current?.pause();
-                        }}
-                        className="text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                      >
-                        Discard
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={applySelection}
-                        className="bg-slate-950 text-white hover:bg-slate-900"
-                      >
-                        <Check className="w-4 h-4 mr-2" />
-                        Accept Selection
-                      </Button>
-                    </div>
-                  </div>
+            <div className="flex items-center justify-between border-t border-slate-200 px-4 py-3">
+              <div className="flex w-full items-center justify-between gap-3">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleSelectAllFaces}
+                  disabled={visiblePersonMetaData.length === 0}
+                  className="text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                >
+                  {allVisibleFacesSelected ? "Deselect all" : "Select all"}
+                </Button>
+                <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-[11px] font-medium uppercase tracking-[0.18em] text-slate-500">
+                  Selection updates live
                 </div>
               </div>
-            ) : (
-              <div className="flex flex-col gap-4 w-full animate-in fade-in slide-in-from-top-2 duration-500">
-                <div className="w-full h-2 flex items-center px-2">
-                  <Slider
-                    min={startTime}
-                    max={endTime}
-                    step={0.01}
-                    value={[currentTime]}
-                    onValueChange={handleScrub}
-                    className="flex-1"
+            </div>
+          </div>
+        )}
+
+        {showSwapOptions && (
+          <div className="absolute left-1/2 top-1/2 z-40 w-[420px] max-w-[calc(100vw-2rem)] -translate-x-1/2 -translate-y-1/2 animate-in fade-in zoom-in-95 duration-200">
+            <div className="overflow-hidden rounded-[28px] border border-white/80 bg-white/92 shadow-[0_40px_120px_rgba(15,23,42,0.22)] backdrop-blur-2xl">
+              {/* Header */}
+              <div className="flex items-center justify-between border-b border-slate-200 px-5 py-4">
+                <div className="flex items-center gap-2.5">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-violet-500 to-indigo-600 text-white shadow-[0_4px_12px_rgba(124,58,237,0.3)]">
+                    <Wand2 className="h-4 w-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-[15px] font-bold text-slate-900">
+                      Swap Options
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      {appliedFaceCount} face{appliedFaceCount === 1 ? "" : "s"}{" "}
+                      selected
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setShowSwapOptions(false)}
+                  className="rounded-full p-1.5 text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-900"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="space-y-4 p-5">
+                {/* Option 1: Upload Reference Image */}
+                <div className="group rounded-2xl border border-slate-200 bg-slate-50/60 p-4 transition-all hover:border-violet-200 hover:bg-violet-50/40">
+                  <div className="mb-3 flex items-center gap-2">
+                    <ImagePlus className="h-4 w-4 text-violet-600" />
+                    <span className="text-[13px] font-semibold text-slate-800">
+                      Reference Face
+                    </span>
+                    <span className="ml-auto rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-violet-600">
+                      Highest priority
+                    </span>
+                  </div>
+                  <p className="mb-3 text-[12px] leading-relaxed text-slate-500">
+                    Upload a photo of the face you want to swap in. This
+                    overrides all other sources.
+                  </p>
+
+                  {referencePreview ? (
+                    <div className="flex items-center gap-3">
+                      <div className="relative h-16 w-16 overflow-hidden rounded-xl border-2 border-violet-300 shadow-[0_4px_16px_rgba(124,58,237,0.15)]">
+                        <img
+                          src={referencePreview}
+                          alt="Reference"
+                          className="h-full w-full object-cover"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="truncate text-[12px] font-medium text-slate-700">
+                          {referenceFile?.name}
+                        </p>
+                        <button
+                          onClick={clearReference}
+                          className="mt-1 text-[11px] font-medium text-red-500 transition-colors hover:text-red-700"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => referenceInputRef.current?.click()}
+                      className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 py-3 text-[12px] font-medium text-slate-500 transition-all hover:border-violet-400 hover:bg-violet-50 hover:text-violet-700"
+                    >
+                      <Upload className="h-3.5 w-3.5" />
+                      Choose image
+                    </button>
+                  )}
+                  <input
+                    ref={referenceInputRef}
+                    type="file"
+                    accept=".jpg,.jpeg,.png,.webp"
+                    onChange={handleReferenceFileChange}
+                    className="hidden"
                   />
                 </div>
 
-                <div className="flex items-center justify-between w-full px-2">
-                  <ToolbarGroup className="flex items-center gap-3">
-                    {onBack && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={onBack}
-                        className="h-8 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-                      >
-                        Back
-                      </Button>
-                    )}
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <Button
-                            size="icon"
-                            variant="ghost"
-                            onClick={togglePlay}
-                            className="h-10 w-10 text-slate-700 hover:bg-slate-100"
-                          >
-                            {playing ? (
-                              <Pause className="w-5 h-5 fill-current" />
-                            ) : (
-                              <Play className="w-5 h-5 fill-current ml-0.5" />
-                            )}
-                          </Button>
-                        }
-                      />
-                      <TooltipPopup>{playing ? "Pause" : "Play"}</TooltipPopup>
-                    </Tooltip>
-
-                    <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm font-medium font-mono tabular-nums text-slate-700">
-                      {relativeCurrentTime.toFixed(2)}{" "}
-                      <span className="mx-1 text-slate-300">/</span>{" "}
-                      {activeDuration.toFixed(2)}s
-                    </div>
-                  </ToolbarGroup>
-
-                  <ToolbarGroup className="flex items-center gap-6">
-                    <ToggleGroup
-                      value={[playbackRate.toString()]}
-                      onValueChange={changeSpeed}
-                      className="rounded-xl border border-slate-200 bg-slate-50 p-1"
-                    >
-                      <Toggle
-                        value="0.5"
-                        className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-slate-500 transition-all hover:text-slate-900 data-[pressed]:border-slate-200 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
-                      >
-                        0.5x
-                      </Toggle>
-                      <Toggle
-                        value="1"
-                        className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-slate-500 transition-all hover:text-slate-900 data-[pressed]:border-slate-200 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
-                      >
-                        1.0x
-                      </Toggle>
-                      <Toggle
-                        value="2"
-                        className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-slate-500 transition-all hover:text-slate-900 data-[pressed]:border-slate-200 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
-                      >
-                        2x
-                      </Toggle>
-                    </ToggleGroup>
-
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <Button
-                            size="sm"
-                            onClick={enterSelectionMode}
-                            className="h-9 border border-slate-200 bg-white px-4 font-semibold text-slate-900 shadow-sm transition-all hover:bg-slate-50 active:scale-95"
-                          >
-                            <Scissors className="w-4 h-4 mr-2" />
-                            Timeframe
-                          </Button>
-                        }
-                      />
-                      <TooltipPopup>Edit timeframe</TooltipPopup>
-                    </Tooltip>
-
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <Button
-                            size="sm"
-                            onClick={enterFaceControlMode}
-                            className={`h-9 border border-slate-200 bg-white px-4 font-semibold text-slate-900 shadow-sm transition-all hover:bg-slate-50 active:scale-95 ${
-                              faceControlMode ? "ring-2 ring-lime-200" : ""
-                            }`}
-                          >
-                            <ScanFace className="w-4 h-4 mr-2" />
-                            Faces
-                          </Button>
-                        }
-                      />
-                      <TooltipPopup>Control Faces</TooltipPopup>
-                    </Tooltip>
-
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <Button
-                            size="sm"
-                            onClick={handleFaceSwap}
-                            disabled={isSwapping}
-                            className="h-9 bg-slate-950 px-4 font-semibold text-white shadow-sm transition-all hover:bg-slate-900 active:scale-95 disabled:bg-slate-300"
-                          >
-                            <SmilePlus className="w-4 h-4 mr-2" />
-                            {onSwap
-                              ? appliedFaceCount > 0
-                                ? `Swap ${appliedFaceCount} Face${appliedFaceCount === 1 ? "" : "s"}`
-                                : "Swap Selected"
-                              : "Export Selection"}
-                          </Button>
-                        }
-                      />
-                      <TooltipPopup>
-                        {isSwapping
-                          ? "Starting swap..."
-                          : onSwap
-                            ? "Open Faces to choose people, then start the backend swap"
-                            : "Export the selected face tracks"}
-                      </TooltipPopup>
-                    </Tooltip>
-                  </ToolbarGroup>
+                {/* Option 2: Style Prompt */}
+                <div className="group rounded-2xl border border-slate-200 bg-slate-50/60 p-4 transition-all hover:border-amber-200 hover:bg-amber-50/30">
+                  <div className="mb-3 flex items-center gap-2">
+                    <Sparkles className="h-4 w-4 text-amber-600" />
+                    <span className="text-[13px] font-semibold text-slate-800">
+                      AI Style
+                    </span>
+                    <span className="ml-auto rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700">
+                      AI generated
+                    </span>
+                  </div>
+                  <p className="mb-3 text-[12px] leading-relaxed text-slate-500">
+                    Describe accessories or styles for a Runware-generated face.
+                    Only applies when no reference image is provided, and falls
+                    back if generation is unavailable.
+                  </p>
+                  <input
+                    type="text"
+                    value={stylePrompt}
+                    onChange={(e) => setStylePrompt(e.target.value)}
+                    placeholder="e.g. wearing sunglasses, with face paint..."
+                    maxLength={200}
+                    className="w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-[13px] text-slate-800 placeholder:text-slate-400 transition-all focus:border-amber-400 focus:outline-none focus:ring-2 focus:ring-amber-100"
+                  />
+                  <div className="mt-1.5 text-right text-[10px] text-slate-400">
+                    {stylePrompt.length}/200
+                  </div>
+                  <p className="mt-2 text-[11px] leading-relaxed text-slate-400">
+                    Requires server-side Runware API configuration. If
+                    generation fails, the swap will continue with the configured
+                    fallback reference.
+                  </p>
                 </div>
+
+                {/* Divider hint */}
+                {!referenceFile && !stylePrompt && (
+                  <p className="text-center text-[11px] text-slate-400">
+                    Leave both empty to use the configured fallback reference
+                  </p>
+                )}
               </div>
-            )}
-          </Toolbar>
-        </TooltipProvider>
-      </div>
+
+              {/* Footer */}
+              <div className="flex items-center gap-3 border-t border-slate-200 px-5 py-4">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowSwapOptions(false)}
+                  className="flex-1 text-slate-600 hover:bg-slate-100"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={handleConfirmSwap}
+                  disabled={isSwapping}
+                  className="flex-1 bg-gradient-to-r from-slate-900 to-slate-800 font-semibold text-white shadow-[0_4px_16px_rgba(15,23,42,0.2)] transition-all hover:from-slate-800 hover:to-slate-700 active:scale-[0.98] disabled:from-slate-300 disabled:to-slate-300"
+                >
+                  <SmilePlus className="mr-2 h-4 w-4" />
+                  {isSwapping
+                    ? "Starting..."
+                    : `Swap ${appliedFaceCount} Face${appliedFaceCount === 1 ? "" : "s"}`}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div
+          className={`mx-auto w-full shrink-0 px-2 transition-all duration-300 ${
+            selectionMode ? "max-w-6xl pt-2" : "mt-auto max-w-5xl"
+          }`}
+        >
+          <TooltipProvider>
+            <Toolbar className="rounded-[30px] border border-white/80 bg-white/80 p-4 shadow-[0_28px_90px_rgba(15,23,42,0.12)] backdrop-blur-2xl">
+              {selectionMode ? (
+                <div className="flex flex-col gap-6 w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <h3 className="text-lg font-black text-slate-950">
+                        Edit timeframe
+                      </h3>
+                      <p className="mt-1 text-sm text-slate-600">
+                        Drag the handles to resize the range, drag the
+                        highlighted band to move the whole selection, or scrub
+                        the playhead for frame-accurate preview.
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        onClick={togglePlay}
+                        className="border border-slate-200 bg-white text-slate-900 hover:bg-slate-50"
+                      >
+                        {playing ? (
+                          <Pause className="mr-2 h-4 w-4" />
+                        ) : (
+                          <Play className="mr-2 h-4 w-4" />
+                        )}
+                        Preview selection
+                      </Button>
+                      <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm font-mono font-semibold text-slate-700">
+                        {Math.max(0, currentTime - tempSelection[0]).toFixed(2)}
+                        s<span className="mx-1 text-slate-300">/</span>
+                        {(tempSelection[1] - tempSelection[0]).toFixed(2)}s
+                      </div>
+                    </div>
+                  </div>
+
+                  <SelectionTimelineEditor
+                    currentTime={selectionCurrentTime}
+                    duration={duration}
+                    keyframes={keyframes}
+                    onScrub={seekToTime}
+                    onSelectionChange={handleTempSelectionChange}
+                    selection={tempSelection}
+                  />
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
+                        Range {tempSelection[0].toFixed(2)}s —{" "}
+                        {tempSelection[1].toFixed(2)}s
+                      </div>
+                      <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
+                        Preview{" "}
+                        {Math.max(0, currentTime - tempSelection[0]).toFixed(2)}
+                        s / {selectionDuration.toFixed(2)}s
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-600">
+                        The selected band is draggable now. Playhead scrubbing
+                        and range movement are handled separately so they no
+                        longer fight each other.
+                      </div>
+                      <div className="flex items-center gap-3">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setSelectionMode(false);
+                            setPlaying(false);
+                            videoRef.current?.pause();
+                          }}
+                          className="text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                        >
+                          Discard
+                        </Button>
+                        <Button
+                          size="sm"
+                          onClick={applySelection}
+                          className="bg-slate-950 text-white hover:bg-slate-900"
+                        >
+                          <Check className="w-4 h-4 mr-2" />
+                          Accept Selection
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-4 w-full animate-in fade-in slide-in-from-top-2 duration-500">
+                  <div className="w-full h-2 flex items-center px-2">
+                    <Slider
+                      min={startTime}
+                      max={endTime}
+                      step={0.01}
+                      value={[currentTime]}
+                      onValueChange={handleScrub}
+                      className="flex-1"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-between w-full px-2">
+                    <ToolbarGroup className="flex items-center gap-3">
+                      {onBack && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={onBack}
+                          className="h-8 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                        >
+                          Back
+                        </Button>
+                      )}
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={togglePlay}
+                              className="h-10 w-10 text-slate-700 hover:bg-slate-100"
+                            >
+                              {playing ? (
+                                <Pause className="w-5 h-5 fill-current" />
+                              ) : (
+                                <Play className="w-5 h-5 fill-current ml-0.5" />
+                              )}
+                            </Button>
+                          }
+                        />
+                        <TooltipPopup>
+                          {playing ? "Pause" : "Play"}
+                        </TooltipPopup>
+                      </Tooltip>
+
+                      <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm font-medium font-mono tabular-nums text-slate-700">
+                        {relativeCurrentTime.toFixed(2)}{" "}
+                        <span className="mx-1 text-slate-300">/</span>{" "}
+                        {activeDuration.toFixed(2)}s
+                      </div>
+                    </ToolbarGroup>
+
+                    <ToolbarGroup className="flex items-center gap-6">
+                      <ToggleGroup
+                        value={[playbackRate.toString()]}
+                        onValueChange={changeSpeed}
+                        className="rounded-xl border border-slate-200 bg-slate-50 p-1"
+                      >
+                        <Toggle
+                          value="0.5"
+                          className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-slate-500 transition-all hover:text-slate-900 data-[pressed]:border-slate-200 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
+                        >
+                          0.5x
+                        </Toggle>
+                        <Toggle
+                          value="1"
+                          className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-slate-500 transition-all hover:text-slate-900 data-[pressed]:border-slate-200 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
+                        >
+                          1.0x
+                        </Toggle>
+                        <Toggle
+                          value="2"
+                          className="h-8 min-w-12 rounded-lg border border-transparent px-3 text-[11px] font-semibold text-slate-500 transition-all hover:text-slate-900 data-[pressed]:border-slate-200 data-[pressed]:bg-white data-[pressed]:text-slate-950 data-[pressed]:shadow-sm"
+                        >
+                          2x
+                        </Toggle>
+                      </ToggleGroup>
+
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              size="sm"
+                              onClick={enterSelectionMode}
+                              className="h-9 border border-slate-200 bg-white px-4 font-semibold text-slate-900 shadow-sm transition-all hover:bg-slate-50 active:scale-95"
+                            >
+                              <Scissors className="w-4 h-4 mr-2" />
+                              Timeframe
+                            </Button>
+                          }
+                        />
+                        <TooltipPopup>Edit timeframe</TooltipPopup>
+                      </Tooltip>
+
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              size="sm"
+                              onClick={enterFaceControlMode}
+                              className={`h-9 border border-slate-200 bg-white px-4 font-semibold text-slate-900 shadow-sm transition-all hover:bg-slate-50 active:scale-95 ${
+                                faceControlMode ? "ring-2 ring-lime-200" : ""
+                              }`}
+                            >
+                              <ScanFace className="w-4 h-4 mr-2" />
+                              Faces
+                            </Button>
+                          }
+                        />
+                        <TooltipPopup>Control Faces</TooltipPopup>
+                      </Tooltip>
+
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <Button
+                              size="sm"
+                              onClick={handleFaceSwap}
+                              disabled={isSwapping}
+                              className="h-9 bg-slate-950 px-4 font-semibold text-white shadow-sm transition-all hover:bg-slate-900 active:scale-95 disabled:bg-slate-300"
+                            >
+                              <SmilePlus className="w-4 h-4 mr-2" />
+                              {onSwap
+                                ? appliedFaceCount > 0
+                                  ? `Swap ${appliedFaceCount} Face${appliedFaceCount === 1 ? "" : "s"}`
+                                  : "Swap Selected"
+                                : "Export Selection"}
+                            </Button>
+                          }
+                        />
+                        <TooltipPopup>
+                          {isSwapping
+                            ? "Starting swap..."
+                            : onSwap
+                              ? "Open Faces to choose people, then start the backend swap"
+                              : "Export the selected face tracks"}
+                        </TooltipPopup>
+                      </Tooltip>
+                    </ToolbarGroup>
+                  </div>
+                </div>
+              )}
+            </Toolbar>
+          </TooltipProvider>
+        </div>
       </div>
     </div>
   );

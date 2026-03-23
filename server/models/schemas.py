@@ -29,13 +29,18 @@ class DetectFacesRequest(MediaRequestBase):
     pass
 
 
+class FrameData(BaseModel):
+    bbox: list[float]
+    det_score: float
+
+
 class FaceInfo(BaseModel):
     face_id: str
     thumbnail: str
     age: int
     gender: str
     frame_count: int
-    frames: dict[str, list[float]] = Field(default_factory=dict)
+    frames: dict[str, FrameData] = Field(default_factory=dict)
 
 
 class DetectFacesResponse(BaseModel):

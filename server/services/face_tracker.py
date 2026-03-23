@@ -395,7 +395,10 @@ def _translate_tracker_export_to_faces(
             "thumbnail_path": metadata["thumbnail_path"],
             "embedding": metadata["embedding"],
             "frames": {
-                str(entry["frame_index"]): list(entry["bbox"])
+                str(entry["frame_index"]): {
+                    "bbox": list(entry["bbox"]),
+                    "det_score": float(entry["confidence"]),
+                }
                 for entry in entries
             },
             "frame_count": len(entries),
@@ -433,7 +436,7 @@ def _dummy_detect_and_cluster(
         for i, _fname in enumerate(frame_files):
             if i % subsample != 0:
                 continue
-            frames_dict[str(i)] = bbox
+            frames_dict[str(i)] = {"bbox": bbox, "det_score": 1.0}
 
         thumbnail = _crop_face_thumbnail(sample, bbox)
         thumb_path = f"{face_id}_thumb.jpg"
@@ -487,7 +490,7 @@ def _dummy_detect_faces_in_image(image_path: str, storage_dir: str) -> dict:
             "thumbnail": thumbnail,
             "thumbnail_path": thumb_path,
             "embedding": [0.0] * 512,
-            "frames": {"0": bbox},
+            "frames": {"0": {"bbox": bbox, "det_score": 1.0}},
             "frame_count": 1,
         }
 
@@ -546,7 +549,7 @@ def detect_faces_in_image(image_path: str, storage_dir: str) -> dict:
                 if hasattr(detected_face, "normed_embedding")
                 else [0.0] * 512
             ),
-            "frames": {"0": bbox},
+            "frames": {"0": {"bbox": bbox, "det_score": float(detected_face.det_score)}},
             "frame_count": 1,
         }
 
@@ -577,9 +580,9 @@ def extract_face_clips(
         stored_frames = sorted(
             (
                 int(frame_key),
-                [float(v) for v in bbox],
+                [float(v) for v in frame_entry["bbox"]],
             )
-            for frame_key, bbox in face_data.get("frames", {}).items()
+            for frame_key, frame_entry in face_data.get("frames", {}).items()
         )
         if start_frame is not None:
             stored_frames = [

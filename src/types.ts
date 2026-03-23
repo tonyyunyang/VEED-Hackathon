@@ -7,13 +7,18 @@ export interface UploadMediaResponse {
   media_type: MediaType;
 }
 
+export interface FrameData {
+  bbox: BoundingBox;
+  det_score: number;
+}
+
 export interface FaceInfo {
   face_id: string;
   thumbnail: string;
   age: number;
   gender: string;
   frame_count: number;
-  frames: Record<string, BoundingBox>;
+  frames: Record<string, FrameData>;
 }
 
 export interface DetectFacesResponse {
