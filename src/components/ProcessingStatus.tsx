@@ -8,12 +8,14 @@ interface ProcessingStatusProps {
   jobId: string;
   onRetry: () => void;
   onStartOver: () => void;
+  onError: (error: string) => void;
 }
 
 export function ProcessingStatus({
   jobId,
   onRetry,
   onStartOver,
+  onError,
 }: ProcessingStatusProps) {
   const [status, setStatus] = useState<StatusResponse>({
     status: "processing",
@@ -21,6 +23,12 @@ export function ProcessingStatus({
     error: null,
     warnings: null,
   });
+
+  useEffect(() => {
+    if (status.status === "failed" && status.error) {
+      onError(status.error);
+    }
+  }, [status.status, status.error, onError]);
 
   useEffect(() => {
     setStatus({

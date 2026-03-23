@@ -15,7 +15,17 @@ import { Gallery } from "./components/Gallery";
 import { VideoPlayer } from "./components/VideoPlayer";
 import { ImageEditor } from "./components/ImageEditor";
 import { PartnerStrip } from "./components/PartnerStrip";
-import { Loader2, ArrowLeft } from "lucide-react";
+import { Loader2, ArrowLeft, AlertCircle } from "lucide-react";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogClose,
+} from "./components/ui/alert-dialog";
+import { Button } from "./components/ui/button";
 
 function demoMediaIdFromUrl(src: string): string | null {
   const fileName = src.split("/").pop()?.split("?")[0];
@@ -246,11 +256,26 @@ function App() {
           </div>
         )}
 
-        {error && (
-          <div className="mb-6 w-full max-w-lg rounded-2xl border border-red-200 bg-red-50/90 px-4 py-3 text-center text-sm font-medium text-red-700 shadow-[0_16px_36px_rgba(239,68,68,0.10)]">
-            {error}
-          </div>
-        )}
+        <AlertDialog open={!!error} onOpenChange={() => setError(null)}>
+          <AlertDialogContent>
+            <AlertDialogHeader className="flex flex-col items-center sm:items-center text-center sm:text-center">
+              <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100 text-red-600">
+                <AlertCircle className="h-10 w-10" />
+              </div>
+              <AlertDialogTitle className="text-2xl font-black text-slate-900">
+                Processing Error
+              </AlertDialogTitle>
+              <AlertDialogDescription className="mt-2 text-base text-slate-600">
+                {error}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter className="sm:justify-center">
+              <AlertDialogClose render={<Button variant="outline" className="min-w-32 rounded-xl" />}>
+                Dismiss
+              </AlertDialogClose>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         <Routes>
           <Route
@@ -311,6 +336,10 @@ function App() {
                     jobId={jobId}
                     onRetry={() => setStep("player")}
                     onStartOver={handleStartOver}
+                    onError={(msg) => {
+                      setError(msg);
+                      setStep("player");
+                    }}
                   />
                 )}
 

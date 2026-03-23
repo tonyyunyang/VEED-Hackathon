@@ -119,23 +119,52 @@ def _runware_error_message(payload: dict[str, Any], task_uuid: str | None = None
 def _runware_image_url(payload: dict[str, Any], task_uuid: str) -> tuple[str | None, str]:
     data = payload.get("data")
     if not isinstance(data, list):
+        logger.warning("Runware response missing 'data' list: %r", payload)
         return None, "missing"
 
     saw_matching_task = False
     for item in data:
-        if not isinstance(item, dict) or item.get("taskUUID") != task_uuid:
+        if not isinstance(item, dict):
             continue
+
+        item_uuid = item.get("taskUUID") or item.get("taskUuid")
+        if item_uuid != task_uuid:
+            continue
+
         saw_matching_task = True
         status = str(item.get("status") or "").strip().lower()
-        if item.get("imageURL"):
-            return str(item["imageURL"]), "ready"
+
+        # Try to find imageURL at top level or in nested results
+        image_url = item.get("imageURL") or item.get("image_url") or item.get("imageUrl")
+        if not image_url and isinstance(item.get("results"), list):
+            for result in item["results"]:
+                if isinstance(result, dict):
+                    image_url = result.get("imageURL") or result.get("image_url") or result.get("imageUrl")
+                    if image_url:
+                        break
+
+        if image_url:
+            return str(image_url), "ready"
+
         if status in {"queued", "pending", "processing"}:
             return None, "processing"
+
         if status in {"success", "completed"}:
+            logger.warning("Runware task %s: completed but missing imageURL. Keys: %s. Item: %r", task_uuid, list(item.keys()), item)
             return None, "malformed"
 
+        # If we saw the task but it has an unknown status (e.g. initial submission)
+        # we treat it as processing to enter the polling loop.
+        if not status:
+            return None, "processing"
+
+        logger.warning("Runware task %s: unexpected status '%s'. Item: %r", task_uuid, status, item)
+
     if saw_matching_task:
-        return None, "malformed"
+        return None, "processing"
+
+    logger.warning("Runware task %s: not found in 'data'. UUIDs in data: %r. Payload: %r",
+                   task_uuid, [i.get("taskUUID") or i.get("taskUuid") for i in data if isinstance(i, dict)], payload)
     return None, "missing"
 
 
@@ -151,6 +180,7 @@ def _post_runware_tasks(client: Any, tasks: list[dict[str, Any]]) -> dict[str, A
 
     if response.status_code >= 400:
         detail = _runware_error_message(payload) or response.text.strip() or f"HTTP {response.status_code}"
+        logger.error("Runware API Error (HTTP %d): %s", response.status_code, detail)
         raise RuntimeError(f"Runware HTTP {response.status_code}: {detail}")
 
     return payload
@@ -178,32 +208,38 @@ def _generate_face_runware(
     try:
         import httpx
 
-        prompt = _build_runware_prompt(age, gender, style_prompt)
+        prompt = _build_runware_prompt(age, gender, style_prompt).replace("\n", " ").strip()
         logger.info("Runware: generating face (age=%s, gender=%s, style=%r)", age, gender, style_prompt)
         logger.info("Runware: prompt → %s", prompt)
 
         task_uuid = str(uuid.uuid4())
         # Text-to-image only — no seedImage; the prompt carries the demographics
-        request_payload = [{
-            "taskType": "imageInference",
-            "taskUUID": task_uuid,
-            "deliveryMethod": "async",
-            "model": "runware:101@1",
-            "positivePrompt": prompt,
-            "width": 512,
-            "height": 512,
-            "steps": 30,
-            "numberResults": 1,
-            "outputType": "URL",
-            "outputFormat": "JPG",
-            "includeCost": True,
-        }]
+        request_payload = [
+            {
+                "taskType": "authentication",
+                "apiKey": RUNWARE_API_KEY,
+            },
+            {
+                "taskType": "imageInference",
+                "taskUUID": task_uuid,
+                "deliveryMethod": "async",
+                "model": "runware:101@1",
+                "positivePrompt": prompt,
+                "width": 512,
+                "height": 512,
+                "steps": 30,
+                "numberResults": 1,
+                "outputType": "URL",
+                "outputFormat": "JPG",
+                "includeCost": True,
+            }
+        ]
 
+        # Use only common headers, let httpx handle Content-Type for json
         headers = {
             "Authorization": f"Bearer {RUNWARE_API_KEY}",
-            "Content-Type": "application/json",
         }
-        timeout = httpx.Timeout(connect=15.0, read=30.0, write=30.0, pool=30.0)
+        timeout = httpx.Timeout(connect=15.0, read=60.0, write=60.0, pool=60.0)
 
         logger.info("Submitting Runware async imageInference task %s", task_uuid)
 
@@ -230,7 +266,10 @@ def _generate_face_runware(
                 time.sleep(poll_delay)
                 poll_payload = _post_runware_tasks(
                     client,
-                    [{"taskType": "getResponse", "taskUUID": task_uuid}],
+                    [
+                        {"taskType": "authentication", "apiKey": RUNWARE_API_KEY},
+                        {"taskType": "getResponse", "taskUUID": task_uuid}
+                    ],
                 )
                 poll_error = _runware_error_message(poll_payload, task_uuid)
                 if poll_error:
@@ -255,7 +294,7 @@ def _generate_face_runware(
                     "Runware image generation timed out while waiting for async task completion"
                 )
 
-            logger.info("Runware task %s completed, downloading generated image", task_uuid)
+            logger.info("Runware task %s completed, URL: %s. Downloading generated image...", task_uuid, image_url)
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
             resp = client.get(image_url)
             resp.raise_for_status()
@@ -266,7 +305,7 @@ def _generate_face_runware(
         return output_path, None
 
     except Exception as exc:
-        logger.warning("Runware face generation failed, falling back", exc_info=True)
+        logger.error("Runware face generation failed: %s", str(exc), exc_info=True)
         return None, str(exc)
 
 
@@ -514,11 +553,24 @@ class ReferenceFaceResolver:
             if generated:
                 return generated
 
-            if runware_error and fallback_resolution.path:
-                self._record_warning(
-                    f"Runware reference generation failed for {face_id}: {runware_error}. "
-                    f"Falling back to {fallback_resolution.source_label}."
+            if runware_error:
+                # NEW POLICY: If we explicitly requested Runware (style prompt set)
+                # and it failed, we ONLY fall back to high-quality library/uploaded images.
+                # If the only other option is the "detected face thumbnail", we fail the job.
+                if fallback_resolution.path and fallback_resolution.source_label != "the detected face thumbnail":
+                    self._record_warning(
+                        f"Runware reference generation failed for {face_id}: {runware_error}. "
+                        f"Falling back to {fallback_resolution.source_label}."
+                    )
+                    return fallback_resolution.path
+
+                # No good fallback available
+                logger.error(
+                    "[%s] Reference source: Runware generation failed (%s) and no other reference images were found. "
+                    "Aborting to avoid low-quality thumbnail swap.",
+                    face_id, runware_error
                 )
+                return None
             logger.info("[%s] Reference source: fallback → %s", face_id, fallback_resolution.path)
             return fallback_resolution.path
 
@@ -1047,28 +1099,7 @@ def swap_faces_pipeline(
     _emit_progress(progress_callback, 0.0)
 
     if not manifests:
-        os.makedirs(output_dir, exist_ok=True)
-        _emit_status(
-            status_callback,
-            phase="compositing",
-            message=f"Preparing {total_output_frames} frame(s) for output",
-            completed_frames=0,
-            total_frames=total_output_frames,
-        )
-        for index, file_name in enumerate(output_frame_names):
-            shutil.copy2(os.path.join(frames_dir, file_name), os.path.join(output_dir, file_name))
-            if total_output_frames > 0:
-                progress = (index + 1) / total_output_frames
-                _emit_progress(progress_callback, progress)
-                _emit_status(
-                    status_callback,
-                    phase="compositing",
-                    message=f"Preparing {total_output_frames} frame(s) for output",
-                    completed_frames=index + 1,
-                    total_frames=total_output_frames,
-                )
-        _emit_progress(progress_callback, 1.0)
-        return
+        raise RuntimeError("No face clips were found in the selected time range. Please select a segment where faces are clearly visible.")
 
     face_ids_to_process = list(manifests.keys())
     total_faces = len(face_ids_to_process)
