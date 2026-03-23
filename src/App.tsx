@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import {
+  Routes,
+  Route,
+  useNavigate,
+  useLocation,
+  useParams,
+  Navigate,
+} from "react-router-dom";
 import "./App.css";
 import "./index.css";
 import type { AppStep, FaceInfo } from "./types";
@@ -8,6 +15,8 @@ import {
   uploadVideo,
   startSwap,
   uploadReference,
+  reAnalyze,
+  getDownloadUrl,
 } from "./lib/utils/api";
 import { VideoUploader } from "./components/VideoUploader";
 import { ProcessingStatus } from "./components/ProcessingStatus";
@@ -39,6 +48,38 @@ function demoMediaIdFromUrl(src: string): string | null {
   return `demo_${demoId.replace(/-/g, "_")}`;
 }
 
+function ProcessingPage({
+  onRetry,
+  onStartOver,
+  onEditResult,
+  onError,
+}: {
+  onRetry: () => void;
+  onStartOver: () => void;
+  onEditResult: (jobId: string) => void;
+  onError: (msg: string) => void;
+}) {
+  const { jobId } = useParams<{ jobId: string }>();
+
+  if (!jobId) {
+    return <Navigate to="/" replace />;
+  }
+
+  return (
+    <div className="w-full flex flex-col items-center py-10">
+      <div className="w-full max-w-2xl rounded-[32px] border border-white/70 bg-white/70 p-10 shadow-[0_30px_90px_rgba(15,23,42,0.10)] backdrop-blur-xl flex flex-col items-center">
+        <ProcessingStatus
+          jobId={jobId}
+          onRetry={onRetry}
+          onStartOver={onStartOver}
+          onEditResult={onEditResult}
+          onError={onError}
+        />
+      </div>
+    </div>
+  );
+}
+
 function App() {
   const [step, setStep] = useState<AppStep>("gallery");
   const [videoId, setVideoId] = useState("");
@@ -57,7 +98,9 @@ function App() {
   const navigate = useNavigate();
   const location = useLocation();
   const showMarketingHero =
-    location.pathname !== "/image-editor" && step !== "player";
+    location.pathname !== "/image-editor" &&
+    !location.pathname.startsWith("/processing") &&
+    step !== "player";
 
   const clearUploadedPreview = () => {
     if (uploadedPreviewUrlRef.current) {
@@ -131,7 +174,7 @@ function App() {
         stylePrompt: swapOptions?.stylePrompt,
       });
       setJobId(jid);
-      setStep("processing");
+      navigate(`/processing/${jid}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Swap failed");
     } finally {
@@ -202,6 +245,30 @@ function App() {
   const handleOpenImageFlow = () => {
     setError(null);
     navigate("/image-editor");
+  };
+
+  const handleEditResult = async (completedJobId: string) => {
+    setIsUploading(true);
+    setError(null);
+    setFaces([]);
+    setDetectionFps(0);
+    setJobId("");
+    try {
+      setStep("detecting");
+      navigate("/editor");
+      const { media_id } = await reAnalyze(completedJobId);
+      setVideoId(media_id);
+      setSelectedVideoSrc(getDownloadUrl(completedJobId));
+      const detection = await detectFaces(media_id);
+      setDetectionFps(detection.fps);
+      setFaces(detection.faces);
+      setStep("player");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Re-analysis failed");
+      setStep("gallery");
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   return (
@@ -331,18 +398,6 @@ function App() {
                   </div>
                 )}
 
-                {step === "processing" && (
-                  <ProcessingStatus
-                    jobId={jobId}
-                    onRetry={() => setStep("player")}
-                    onStartOver={handleStartOver}
-                    onError={(msg) => {
-                      setError(msg);
-                      setStep("player");
-                    }}
-                  />
-                )}
-
                 {step === "player" && (
                   <div className="fixed inset-0 z-50 h-screen w-full">
                     <VideoPlayer
@@ -358,6 +413,25 @@ function App() {
                   </div>
                 )}
               </>
+            }
+          />
+
+          <Route
+            path="/processing/:jobId"
+            element={
+              <ProcessingPage
+                onRetry={() => {
+                  setStep("player");
+                  navigate("/editor");
+                }}
+                onStartOver={handleStartOver}
+                onEditResult={handleEditResult}
+                onError={(msg) => {
+                  setError(msg);
+                  setStep("player");
+                  navigate("/editor");
+                }}
+              />
             }
           />
 

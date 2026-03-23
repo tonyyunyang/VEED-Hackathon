@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { getStatus, getDownloadUrl } from "../lib/utils/api";
 import type { StatusResponse } from "../types";
-import { Download, AlertCircle, Loader2, RotateCcw } from "lucide-react";
+import { Download, AlertCircle, Loader2, RotateCcw, User } from "lucide-react";
 import { MediaPreview } from "./MediaPreview";
 
 interface ProcessingStatusProps {
   jobId: string;
   onRetry: () => void;
   onStartOver: () => void;
+  onEditResult: (jobId: string) => void;
   onError: (error: string) => void;
 }
 
@@ -15,6 +16,7 @@ export function ProcessingStatus({
   jobId,
   onRetry,
   onStartOver,
+  onEditResult,
   onError,
 }: ProcessingStatusProps) {
   const [status, setStatus] = useState<StatusResponse>({
@@ -120,6 +122,13 @@ export function ProcessingStatus({
           >
             <RotateCcw className="w-4 h-4" />
             Start Over
+          </button>
+          <button
+            className="py-3 px-6 bg-lime-500 text-white rounded-xl font-medium hover:bg-lime-600 transition-colors inline-flex items-center gap-2 shadow-[0_12px_24px_rgba(132,204,22,0.2)]"
+            onClick={() => onEditResult(jobId)}
+          >
+            <User className="w-4 h-4" />
+            Edit Faces
           </button>
         </div>
       </div>

@@ -897,6 +897,45 @@ async def get_status(job_id: str):
     )
 
 
+@app.post("/api/re-analyze/{job_id}", response_model=UploadResponse)
+async def re_analyze(job_id: str):
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[job_id]
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Job is not completed")
+
+    output_path = job.get("output_path")
+    if not output_path or not os.path.exists(output_path):
+        # Fallback if output_path is not in job dict
+        media_id = job.get("media_id") or job.get("video_id")
+        if not media_id:
+            raise HTTPException(status_code=404, detail="Output file not found")
+        vdir = os.path.join(STORAGE_DIR, media_id)
+        faces_path = os.path.join(vdir, "faces.json")
+        if not os.path.exists(faces_path):
+            raise HTTPException(status_code=404, detail="Output file not found")
+        faces_json = face_tracker.load_faces_json(faces_path)
+        output_path, _, _ = _output_metadata_for_media(vdir, faces_json)
+
+    if not os.path.exists(output_path):
+        raise HTTPException(status_code=404, detail=f"Output file not found at {output_path}")
+
+    # Create new media_id
+    ext = os.path.splitext(output_path)[1].lower()
+    new_media_id = str(uuid.uuid4())[:8]
+    new_media_dir = os.path.join(STORAGE_DIR, new_media_id)
+    os.makedirs(new_media_dir, exist_ok=True)
+
+    new_original_path = os.path.join(new_media_dir, f"original{ext}")
+    shutil.copy2(output_path, new_original_path)
+
+    media_type = video.media_type_for_path(new_original_path)
+
+    return UploadResponse(video_id=new_media_id, media_id=new_media_id, media_type=media_type)
+
+
 @app.get("/api/download/{job_id}")
 async def download_video(job_id: str):
     if job_id not in jobs:

@@ -180,6 +180,15 @@ export async function getStatus(jobId: string): Promise<StatusResponse> {
   return getJobStatus(jobId);
 }
 
+export async function reAnalyze(jobId: string): Promise<UploadMediaResponse> {
+  const res = await requestApi(
+    `/api/re-analyze/${jobId}`,
+    { method: "POST" },
+    "Re-analysis failed",
+  );
+  return res.json();
+}
+
 export function getJobDownloadUrl(jobId: string): string {
   return apiUrl(`/api/download/${jobId}`);
 }
