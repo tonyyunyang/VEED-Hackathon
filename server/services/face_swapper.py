@@ -42,6 +42,7 @@ if TYPE_CHECKING:
     from insightface.app import FaceAnalysis
 
 _app: FaceAnalysis | None = None
+_crop_app: FaceAnalysis | None = None
 _swapper = None
 _onnx_lock = threading.Lock()
 
@@ -277,6 +278,17 @@ def _get_app() -> FaceAnalysis:
         _app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
         _app.prepare(ctx_id=0, det_size=(640, 640))
     return _app
+
+
+def _get_crop_app() -> FaceAnalysis:
+    """Lightweight detector for pre-cropped face regions (smaller det_size)."""
+    global _crop_app
+    if _crop_app is None:
+        from insightface.app import FaceAnalysis
+
+        _crop_app = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+        _crop_app.prepare(ctx_id=0, det_size=(256, 256))
+    return _crop_app
 
 
 def _get_swapper():
@@ -926,14 +938,18 @@ def swap_single_face_clip(
             logger.warning("swap_single_face_clip: could not read frame %s", file_name)
             continue
 
+        # Use smaller detector since crops are already isolated to face region.
+        # Skip cosine similarity — the crop IS the target face, just pick the
+        # largest detected face (most prominent in the pre-cropped region).
         with _onnx_lock:
-            detected = _get_app().get(crop)
-        for detected_face in detected:
-            similarity = _cosine_similarity(detected_face.normed_embedding, target_embedding)
-            if similarity >= 0.4:
-                crop = adapter.swap_face(crop, detected_face)
-                swapped_count += 1
-                break
+            detected = _get_crop_app().get(crop)
+        if detected:
+            best_face = max(
+                detected,
+                key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
+            )
+            crop = adapter.swap_face(crop, best_face)
+            swapped_count += 1
 
         cv2.imwrite(os.path.join(output_dir, file_name), crop)
         if total > 0:
@@ -962,35 +978,43 @@ def composite_swapped_faces(
     last_log_pct = -1
 
     for index, file_name in enumerate(all_frame_files):
-        frame = cv2.imread(os.path.join(frames_dir, file_name))
-        if frame is None:
-            logger.warning("composite: could not read original frame %s, skipping", file_name)
-            continue
-
-        for face_id, manifest in manifests.items():
-            if file_name not in manifest["crops"]:
+        # Skip loading frames that have no swapped crops — just copy original
+        has_swap = any(file_name in manifest["crops"] for manifest in manifests.values())
+        if not has_swap:
+            shutil.copy2(
+                os.path.join(frames_dir, file_name),
+                os.path.join(output_dir, file_name),
+            )
+        else:
+            frame = cv2.imread(os.path.join(frames_dir, file_name))
+            if frame is None:
+                logger.warning("composite: could not read original frame %s, skipping", file_name)
                 continue
 
-            swapped_crop_path = os.path.join(swapped_base_dir, face_id, file_name)
-            if not os.path.exists(swapped_crop_path):
-                logger.debug("composite: missing swapped crop %s for %s", file_name, face_id)
-                continue
+            for face_id, manifest in manifests.items():
+                if file_name not in manifest["crops"]:
+                    continue
 
-            swapped_crop = cv2.imread(swapped_crop_path)
-            if swapped_crop is None:
-                logger.warning("composite: could not read swapped crop %s for %s", file_name, face_id)
-                continue
+                swapped_crop_path = os.path.join(swapped_base_dir, face_id, file_name)
+                if not os.path.exists(swapped_crop_path):
+                    logger.debug("composite: missing swapped crop %s for %s", file_name, face_id)
+                    continue
 
-            x1, y1, x2, y2 = manifest["crops"][file_name]
-            region_h = y2 - y1
-            region_w = x2 - x1
-            crop_h, crop_w = swapped_crop.shape[:2]
-            if crop_h != region_h or crop_w != region_w:
-                swapped_crop = cv2.resize(swapped_crop, (region_w, region_h))
+                swapped_crop = cv2.imread(swapped_crop_path)
+                if swapped_crop is None:
+                    logger.warning("composite: could not read swapped crop %s for %s", file_name, face_id)
+                    continue
 
-            frame[y1:y2, x1:x2] = swapped_crop
+                x1, y1, x2, y2 = manifest["crops"][file_name]
+                region_h = y2 - y1
+                region_w = x2 - x1
+                crop_h, crop_w = swapped_crop.shape[:2]
+                if crop_h != region_h or crop_w != region_w:
+                    swapped_crop = cv2.resize(swapped_crop, (region_w, region_h))
 
-        cv2.imwrite(os.path.join(output_dir, file_name), frame)
+                frame[y1:y2, x1:x2] = swapped_crop
+
+            cv2.imwrite(os.path.join(output_dir, file_name), frame)
         if total > 0:
             pct = int((index + 1) / total * 100)
             if pct >= last_log_pct + 10:

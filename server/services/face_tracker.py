@@ -601,27 +601,31 @@ def extract_face_clips(
             shutil.rmtree(clip_dir)
         os.makedirs(clip_dir, exist_ok=True)
 
-        per_frame_data: list[tuple[str, np.ndarray, list[float]]] = []
-        for frame_idx, bbox in stored_frames:
-            if frame_idx < 0 or frame_idx >= len(frame_files):
-                continue
-            frame_path = os.path.join(frames_dir, frame_files[frame_idx])
-            frame = cv2.imread(frame_path)
-            if frame is None:
-                continue
-            per_frame_data.append((frame_files[frame_idx], frame, bbox))
-
-        if not per_frame_data:
+        # Filter to valid frame indices
+        valid_frames = [
+            (frame_idx, bbox)
+            for frame_idx, bbox in stored_frames
+            if 0 <= frame_idx < len(frame_files)
+        ]
+        if not valid_frames:
             continue
 
+        # Pass 1: compute max_face_size from bbox metadata only (no imread)
         max_face_size = max(
-            max(bbox[2] - bbox[0], bbox[3] - bbox[1]) for _, _, bbox in per_frame_data
+            max(bbox[2] - bbox[0], bbox[3] - bbox[1]) for _, bbox in valid_frames
         )
         crop_size = max(2, int(max_face_size * 1.5))
 
+        # Pass 2: load one frame at a time, crop, write, release
         crops_manifest: dict[str, tuple[int, int, int, int]] = {}
         actual_sizes: list[tuple[int, int]] = []
-        for fname, frame, bbox in per_frame_data:
+        for frame_idx, bbox in valid_frames:
+            fname = frame_files[frame_idx]
+            frame_path = os.path.join(frames_dir, fname)
+            frame = cv2.imread(frame_path)
+            if frame is None:
+                continue
+
             h, w = frame.shape[:2]
             cx = (bbox[0] + bbox[2]) / 2
             cy = (bbox[1] + bbox[3]) / 2
