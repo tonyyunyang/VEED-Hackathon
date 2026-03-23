@@ -454,6 +454,46 @@ def _dummy_detect_and_cluster(
     return {"faces": faces_data}
 
 
+def _dummy_detect_faces_in_image(image_path: str, storage_dir: str) -> dict:
+    frame = cv2.imread(image_path)
+    if frame is None:
+        return {"faces": {}}
+
+    h, w = frame.shape[:2]
+    rng = random.Random(42)
+    max_faces = 3
+    face_size = max(1, min(h, w) // 4)
+    faces_data = {}
+
+    for idx in range(max_faces):
+        face_id = f"face_{idx}"
+        x1 = rng.randint(0, max(0, w - face_size))
+        y1 = rng.randint(0, max(0, h - face_size))
+        x2 = x1 + face_size
+        y2 = y1 + face_size
+        bbox = [float(x1), float(y1), float(x2), float(y2)]
+
+        padded_bbox = _expand_bbox(bbox, frame)
+        thumbnail = _crop_face_thumbnail(frame, padded_bbox)
+        thumb_path = f"{face_id}_thumb.jpg"
+        px1, py1, px2, py2 = padded_bbox
+        crop = frame[py1:py2, px1:px2]
+        if crop.size > 0:
+            cv2.imwrite(os.path.join(storage_dir, thumb_path), crop)
+
+        faces_data[face_id] = {
+            "age": rng.randint(20, 45),
+            "gender": rng.choice(["male", "female"]),
+            "thumbnail": thumbnail,
+            "thumbnail_path": thumb_path,
+            "embedding": [0.0] * 512,
+            "frames": {"0": bbox},
+            "frame_count": 1,
+        }
+
+    return {"faces": faces_data}
+
+
 def detect_and_cluster(
     frames_dir: str, storage_dir: str, subsample: int = 5
 ) -> dict:
@@ -464,6 +504,52 @@ def detect_and_cluster(
     tracker_json_path = _run_tracker_pipeline(video_path, storage_dir)
     tracker_export = _load_tracker_export(tracker_json_path)
     faces_data = _translate_tracker_export_to_faces(tracker_export, frames_dir, storage_dir)
+    return {"faces": faces_data}
+
+
+def detect_faces_in_image(image_path: str, storage_dir: str) -> dict:
+    if DUMMY_TRACKING:
+        return _dummy_detect_faces_in_image(image_path, storage_dir)
+
+    frame = cv2.imread(image_path)
+    if frame is None:
+        raise RuntimeError(f"Unable to read image: {image_path}")
+
+    detected_faces = _get_app().get(frame)
+    ordered_faces = sorted(
+        detected_faces,
+        key=lambda face: (
+            round(float(face.bbox[0]), 4),
+            round(float(face.bbox[1]), 4),
+            -_frame_area(face.bbox.tolist()),
+        ),
+    )
+
+    faces_data: dict[str, dict[str, Any]] = {}
+    for face_index, detected_face in enumerate(ordered_faces):
+        face_id = f"face_{face_index}"
+        bbox = [float(v) for v in detected_face.bbox.tolist()]
+        padded_bbox = _expand_bbox(bbox, frame)
+        px1, py1, px2, py2 = padded_bbox
+        crop = frame[py1:py2, px1:px2]
+        thumb_path = f"{face_id}_thumb.jpg"
+        if crop.size > 0:
+            cv2.imwrite(os.path.join(storage_dir, thumb_path), crop)
+
+        faces_data[face_id] = {
+            "age": int(getattr(detected_face, "age", 0) or 0),
+            "gender": _normalize_gender(getattr(detected_face, "gender", "unknown")),
+            "thumbnail": _crop_face_thumbnail(frame, padded_bbox),
+            "thumbnail_path": thumb_path,
+            "embedding": (
+                detected_face.normed_embedding.tolist()
+                if hasattr(detected_face, "normed_embedding")
+                else [0.0] * 512
+            ),
+            "frames": {"0": bbox},
+            "frame_count": 1,
+        }
+
     return {"faces": faces_data}
 
 
@@ -515,27 +601,31 @@ def extract_face_clips(
             shutil.rmtree(clip_dir)
         os.makedirs(clip_dir, exist_ok=True)
 
-        per_frame_data: list[tuple[str, np.ndarray, list[float]]] = []
-        for frame_idx, bbox in stored_frames:
-            if frame_idx < 0 or frame_idx >= len(frame_files):
-                continue
-            frame_path = os.path.join(frames_dir, frame_files[frame_idx])
-            frame = cv2.imread(frame_path)
-            if frame is None:
-                continue
-            per_frame_data.append((frame_files[frame_idx], frame, bbox))
-
-        if not per_frame_data:
+        # Filter to valid frame indices
+        valid_frames = [
+            (frame_idx, bbox)
+            for frame_idx, bbox in stored_frames
+            if 0 <= frame_idx < len(frame_files)
+        ]
+        if not valid_frames:
             continue
 
+        # Pass 1: compute max_face_size from bbox metadata only (no imread)
         max_face_size = max(
-            max(bbox[2] - bbox[0], bbox[3] - bbox[1]) for _, _, bbox in per_frame_data
+            max(bbox[2] - bbox[0], bbox[3] - bbox[1]) for _, bbox in valid_frames
         )
         crop_size = max(2, int(max_face_size * 1.5))
 
+        # Pass 2: load one frame at a time, crop, write, release
         crops_manifest: dict[str, tuple[int, int, int, int]] = {}
         actual_sizes: list[tuple[int, int]] = []
-        for fname, frame, bbox in per_frame_data:
+        for frame_idx, bbox in valid_frames:
+            fname = frame_files[frame_idx]
+            frame_path = os.path.join(frames_dir, fname)
+            frame = cv2.imread(frame_path)
+            if frame is None:
+                continue
+
             h, w = frame.shape[:2]
             cx = (bbox[0] + bbox[2]) / 2
             cy = (bbox[1] + bbox[3]) / 2
@@ -569,11 +659,8 @@ def extract_face_clips(
 
 
 def save_faces_json(faces_data: dict, video_info: dict, output_path: str) -> None:
-    data = {
-        "fps": video_info["fps"],
-        "total_frames": video_info["total_frames"],
-        "faces": faces_data["faces"],
-    }
+    data = dict(video_info)
+    data["faces"] = faces_data["faces"]
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
