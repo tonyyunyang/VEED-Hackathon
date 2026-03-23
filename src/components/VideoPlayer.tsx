@@ -273,7 +273,9 @@ const drawPersonOverlay = (
   ctx.stroke();
   ctx.restore();
 
-  const labelText = person.label;
+  const labelText = options.isHovered
+    ? `${person.label} (${(person.det_score * 100).toFixed(1)}%)`
+    : person.label;
   ctx.save();
   ctx.font = "700 14px Inter, system-ui, sans-serif";
   const labelWidth = Math.ceil(ctx.measureText(labelText).width) + 22;

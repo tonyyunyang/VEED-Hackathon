@@ -26,7 +26,7 @@ class UploadResponse(BaseModel):
 
 
 class DetectFacesRequest(MediaRequestBase):
-    pass
+    force: bool = False
 
 
 class FrameData(BaseModel):

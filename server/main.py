@@ -200,7 +200,7 @@ def _load_detect_faces_response(media_id: str, faces_json: dict) -> DetectFacesR
     )
 
 
-def _analyze_media_sync(media_id: str) -> DetectFacesResponse:
+def _analyze_media_sync(media_id: str, force: bool = False) -> DetectFacesResponse:
     vdir = _media_dir(media_id)
 
     original = _find_original_media(vdir)
@@ -210,7 +210,7 @@ def _analyze_media_sync(media_id: str) -> DetectFacesResponse:
     frames_dir = os.path.join(vdir, "frames")
     media_type = video.media_type_for_path(original)
 
-    if _has_cached_analysis_artifacts(vdir, media_type):
+    if not force and _has_cached_analysis_artifacts(vdir, media_type):
         faces_json = face_tracker.load_faces_json(os.path.join(vdir, "faces.json"))
         return _load_detect_faces_response(media_id, faces_json)
 
@@ -512,7 +512,7 @@ async def upload_reference(video_id: str, file: UploadFile = File(...)):
 async def detect_faces(req: DetectFacesRequest):
     media_id = req.media_id or req.video_id
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _analyze_media_sync, media_id)
+    return await loop.run_in_executor(None, _analyze_media_sync, media_id, req.force)
 
 
 async def _run_swap_job(
