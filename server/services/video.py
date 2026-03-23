@@ -70,9 +70,14 @@ def reassemble_video(
     cmd = [
         "ffmpeg", "-framerate", str(fps),
         "-i", os.path.join(frames_dir, "frame_%04d.jpg"),
-        "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
     ]
     if audio_path and os.path.exists(audio_path):
         cmd.extend(["-i", audio_path, "-c:a", "aac", "-shortest"])
-    cmd.extend(["-c:v", "libx264", "-pix_fmt", "yuv420p", output_path, "-y"])
+    cmd.extend([
+        "-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2",
+        "-c:v", "libx264", 
+        "-pix_fmt", "yuv420p", 
+        output_path, 
+        "-y"
+    ])
     subprocess.run(cmd, capture_output=True, check=True)
