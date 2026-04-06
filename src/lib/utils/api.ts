@@ -196,3 +196,34 @@ export function getJobDownloadUrl(jobId: string): string {
 export function getDownloadUrl(jobId: string): string {
   return getJobDownloadUrl(jobId);
 }
+
+export async function deleteJob(jobId: string): Promise<void> {
+  await requestApi(`/api/job/${jobId}`, { method: "DELETE" }, "Cleanup failed");
+}
+
+export async function downloadFile(url: string, filename: string): Promise<void> {
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error("Download failed");
+    const blob = await response.blob();
+    const downloadUrl = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = downloadUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(downloadUrl);
+  } catch (error) {
+    console.error("Manual download failed:", error);
+    // Fallback to direct link if fetch fails (e.g. CORS)
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.target = "_blank";
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+  }
+}
+

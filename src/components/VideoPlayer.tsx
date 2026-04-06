@@ -37,7 +37,7 @@ import {
 } from "lucide-react";
 import { Spinner } from "./ui/spinner";
 import { Progress, ProgressIndicator, ProgressTrack } from "./ui/progress";
-import { getDownloadUrl } from "../lib/utils/api";
+import { getDownloadUrl, downloadFile } from "../lib/utils/api";
 
 type PersonId = string;
 
@@ -598,6 +598,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [playing, setPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const handleDownloadClick = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!resultJobId) return;
+    const url = getDownloadUrl(resultJobId);
+    await downloadFile(url, `swapped-${resultJobId}.mp4`);
+  };
   const [playbackRate, setPlaybackRate] = useState(1);
   const [selectionMode, setSelectionMode] = useState(false);
   const [faceControlMode, setFaceControlMode] = useState(false);
@@ -1605,7 +1612,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 !isAnalyzingFaces &&
                 !hasInteractedWithFace &&
                 visiblePersonMetaData.length > 0 && (
-                  <div className="pointer-events-none absolute bottom-4 left-4 z-10 rounded-full border border-white/20 bg-black/48 px-3 py-1.5 text-xs font-medium text-white/82 shadow-[0_14px_32px_rgba(15,23,42,0.22)] backdrop-blur-md animate-in fade-in duration-500">
+                  <div className="pointer-events-none absolute bottom-8 left-4 z-10 rounded-full border border-white/20 bg-black/48 px-3 py-1.5 text-xs font-medium text-white/82 shadow-[0_14px_32px_rgba(15,23,42,0.22)] backdrop-blur-md animate-in fade-in duration-500">
                     Hover and click face boxes to toggle selection
                   </div>
                 )}
@@ -1683,21 +1690,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                 </div>
               )}
 
-              {resultJobId !== undefined && !isResult && !isSwapping && (
+              {resultJobId && !isResult && !isSwapping && (
                 <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <a
-                        href={getDownloadUrl(resultJobId)}
-                        download={`swapped-${resultJobId}.mp4`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="absolute bottom-6 right-6 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white shadow-xl backdrop-blur-md transition-all hover:bg-black/60 hover:scale-105 active:scale-95"
-                      >
-                        <Download className="h-5 w-5" />
-                      </a>
-                    }
-                  />
+                  <TooltipTrigger>
+                    <button
+                      type="button"
+                      onClick={handleDownloadClick}
+                      className="download-button--video absolute bottom-6 right-6 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white shadow-xl backdrop-blur-md transition-all hover:bg-black/60 hover:scale-105 active:scale-95"
+                    >
+                      <Download className="h-5 w-5" />
+                    </button>
+                  </TooltipTrigger>
                   <TooltipPopup>Download latest result</TooltipPopup>
                 </Tooltip>
               )}
@@ -1870,61 +1873,6 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               </div>
 
               <div className="space-y-4 p-5">
-                {/* Option 1: Upload Reference Image */}
-                <div className="group rounded-2xl border border-slate-200 bg-slate-50/60 p-4 transition-all hover:border-violet-200 hover:bg-violet-50/40">
-                  <div className="mb-3 flex items-center gap-2">
-                    <ImagePlus className="h-4 w-4 text-violet-600" />
-                    <span className="text-[13px] font-semibold text-slate-800">
-                      Reference Face
-                    </span>
-                    <span className="ml-auto rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-violet-600">
-                      Highest priority
-                    </span>
-                  </div>
-                  <p className="mb-3 text-[12px] leading-relaxed text-slate-500">
-                    Upload a photo of the face you want to swap in. This
-                    overrides all other sources.
-                  </p>
-
-                  {referencePreview ? (
-                    <div className="flex items-center gap-3">
-                      <div className="relative h-16 w-16 overflow-hidden rounded-xl border-2 border-violet-300 shadow-[0_4px_16px_rgba(124,58,237,0.15)]">
-                        <img
-                          src={referencePreview}
-                          alt="Reference"
-                          className="h-full w-full object-cover"
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="truncate text-[12px] font-medium text-slate-700">
-                          {referenceFile?.name}
-                        </p>
-                        <button
-                          onClick={clearReference}
-                          className="mt-1 text-[11px] font-medium text-red-500 transition-colors hover:text-red-700"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => referenceInputRef.current?.click()}
-                      className="flex w-full items-center justify-center gap-2 rounded-xl border-2 border-dashed border-slate-300 bg-white px-4 py-3 text-[12px] font-medium text-slate-500 transition-all hover:border-violet-400 hover:bg-violet-50 hover:text-violet-700"
-                    >
-                      <Upload className="h-3.5 w-3.5" />
-                      Choose image
-                    </button>
-                  )}
-                  <input
-                    ref={referenceInputRef}
-                    type="file"
-                    accept=".jpg,.jpeg,.png,.webp"
-                    onChange={handleReferenceFileChange}
-                    className="hidden"
-                  />
-                </div>
-
                 {/* Option 2: Style Prompt */}
                 <div className="group rounded-2xl border border-slate-200 bg-slate-50/60 p-4 transition-all hover:border-amber-200 hover:bg-amber-50/30">
                   <div className="mb-3 flex items-center gap-2">
@@ -2181,26 +2129,14 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                             <span>Edit</span>
                           </Button>
 
-                          <a
-                            className="flex items-center"
-                            href={
-                              resultJobId
-                                ? getDownloadUrl(resultJobId)
-                                : videoSrc
-                            }
-                            download={
-                              resultJobId
-                                ? `swapped-${resultJobId}.mp4`
-                                : "swapped-video.mp4"
-                            }
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <Button
+                            size="sm"
+                            className=" "
+                            onClick={handleDownloadClick}
                           >
-                            <Button size="sm" className=" ">
-                              <Download className="mr-2" />
-                              <span>Download</span>
-                            </Button>
-                          </a>
+                            <Download className="mr-2" />
+                            <span>Download</span>
+                          </Button>
                         </div>
                       ) : (
                         <>

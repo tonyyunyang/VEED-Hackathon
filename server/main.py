@@ -963,6 +963,33 @@ async def download_video(job_id: str):
     return FileResponse(output_path, media_type=output_media_type, filename=output_filename)
 
 
+@app.delete("/api/job/{job_id}")
+async def delete_job(job_id: str):
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    job = jobs[job_id]
+    output_path = job.get("output_path")
+
+    # Logic to remove files if they aren't demo/sample files
+    if output_path and os.path.exists(output_path):
+        path_obj = Path(output_path)
+        # Safe check: Only delete if it's in the storage/media_id/swap_cache folder
+        try:
+            is_in_storage = path_obj.resolve().is_relative_to(Path(STORAGE_DIR).resolve())
+            is_in_swap_cache = SWAP_CACHE_DIRNAME in path_obj.parts
+            
+            if is_in_storage and is_in_swap_cache:
+                os.remove(output_path)
+                logger.info("Deleted output file for job %s: %s", job_id, output_path)
+        except (ValueError, OSError) as e:
+            logger.warning("Search/delete failed for job %s: %s", job_id, e)
+
+    del jobs[job_id]
+    logger.info("Deleted job metadata for %s", job_id)
+    return {"status": "deleted", "job_id": job_id}
+
+
 if __name__ == "__main__":
     import uvicorn
 

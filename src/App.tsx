@@ -11,6 +11,7 @@ import {
   reAnalyze,
   getDownloadUrl,
   getStatus,
+  deleteJob,
 } from "./lib/utils/api";
 import type { StatusResponse } from "./types";
 import { VideoUploader } from "./components/VideoUploader";
@@ -97,6 +98,12 @@ function App() {
 
         if (s.status === "completed") {
           const downloadUrl = getDownloadUrl(swapJobId);
+          
+          // Rotational Cleanup: Only one result is active at a time to keep the session light
+          if (resultJobId && resultJobId !== swapJobId) {
+            void deleteJob(resultJobId);
+          }
+
           setSelectedVideoSrc(downloadUrl);
           setIsResult(true);
           setResultJobId(swapJobId);
@@ -120,7 +127,7 @@ function App() {
       active = false;
       clearInterval(interval);
     };
-  }, [isSwapping, swapJobId]);
+  }, [isSwapping, swapJobId, resultJobId]);
 
   // Unified Analysis Workflow
   const runAnalysisWorkflow = useCallback(
@@ -226,6 +233,10 @@ function App() {
   };
 
   const handleStartOver = () => {
+    if (resultJobId) {
+      void deleteJob(resultJobId);
+    }
+    
     clearUploadedPreview();
     setStep("gallery");
     setVideoId("");
