@@ -33,10 +33,10 @@ import {
   Wand2,
   ImagePlus,
   Download,
-  Loader2,
   RotateCcw,
 } from "lucide-react";
 import { Spinner } from "./ui/spinner";
+import { Progress, ProgressIndicator, ProgressTrack } from "./ui/progress";
 import { getDownloadUrl } from "../lib/utils/api";
 
 type PersonId = string;
@@ -155,13 +155,13 @@ const calculateVideoLayout = (
   const canvasRatio = cw / ch;
 
   if (videoRatio > canvasRatio) {
-    const width = cw;
-    const height = cw / videoRatio;
-    return { width, height, x: 0, y: (ch - height) / 2 };
-  } else {
     const height = ch;
     const width = ch * videoRatio;
     return { width, height, x: (cw - width) / 2, y: 0 };
+  } else {
+    const width = cw;
+    const height = cw / videoRatio;
+    return { width, height, x: 0, y: (ch - height) / 2 };
   }
 };
 
@@ -606,7 +606,11 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   const [hoveredPersonId, setHoveredPersonId] = useState<PersonId | null>(null);
   const [hasFaceSelectionConfigured, setHasFaceSelectionConfigured] =
     useState(false);
-  const [facePanelPosition, setFacePanelPosition] = useState({ x: 24, y: 118 });
+  const [hasInteractedWithFace, setHasInteractedWithFace] = useState(false);
+  const [facePanelPosition, setFacePanelPosition] = useState<{
+    x: number;
+    y: number;
+  }>({ x: 24, y: 118 });
   const [showSwapOptions, setShowSwapOptions] = useState(false);
   const [stylePrompt, setStylePrompt] = useState("");
   const [referenceFile, setReferenceFile] = useState<File | null>(null);
@@ -810,6 +814,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         : [...prev, id];
       setAppliedSelectedIds(next);
       setHasFaceSelectionConfigured(true);
+      setHasInteractedWithFace(true);
       return next;
     });
   };
@@ -1151,6 +1156,49 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     isAnalyzingFaces,
   ]);
 
+  // Force an immediate repaint when analysis finishes to ensure detection boxes appear
+  useEffect(() => {
+    if (!isAnalyzingFaces && faces.length > 0 && canvasRef.current) {
+      // Small timeout to ensure the DOM has updated and the Progress Pill is gone
+      const timer = setTimeout(() => {
+        const video = videoRef.current;
+        const canvas = canvasRef.current;
+        if (!video || !canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx || video.videoWidth === 0) return;
+
+        const layout = calculateVideoLayout(
+          canvas.width,
+          canvas.height,
+          video.videoWidth,
+          video.videoHeight,
+        );
+        drawVideoFrame(ctx, video, canvas.width, canvas.height, layout);
+
+        // One-time draw of faces
+        const frameIdx = Math.floor(
+          video.currentTime * trackingData.video_metadata.fps,
+        );
+        const entries = trackingData.frames[frameIdx.toString()] || [];
+        for (const entry of entries) {
+          const color = getPersonColor(entry.id);
+          const [x1, y1, x2, y2] = entry.bbox;
+          const scaleX = layout.width / video.videoWidth;
+          const scaleY = layout.height / video.videoHeight;
+          const vx = x1 * scaleX + layout.x;
+          const vy = y1 * scaleY + layout.y;
+          const vw = (x2 - x1) * scaleX;
+          const vh = (y2 - y1) * scaleY;
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = color;
+          traceRoundedRect(ctx, vx, vy, vw, vh, 8);
+          ctx.stroke();
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [isAnalyzingFaces, faces, trackingData, getPersonColor]);
+
   // Sync canvas size with parent
   useEffect(() => {
     const updateSize = () => {
@@ -1295,16 +1343,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
 
       if (selectionMode && playing && curr >= tempSelection[1]) {
         videoRef.current.pause();
-        videoRef.current.currentTime = tempSelection[0];
-        setCurrentTime(tempSelection[0]);
         setPlaying(false);
         return;
       }
 
       if (curr >= endTime && playing) {
         videoRef.current.pause();
-        videoRef.current.currentTime = startTime;
-        setCurrentTime(startTime);
         setPlaying(false);
       }
     }
@@ -1558,8 +1602,10 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/44 to-transparent" />
               {!selectionMode &&
                 !isResult &&
+                !isAnalyzingFaces &&
+                !hasInteractedWithFace &&
                 visiblePersonMetaData.length > 0 && (
-                  <div className="pointer-events-none absolute bottom-4 left-4 z-10 rounded-full border border-white/20 bg-black/48 px-3 py-1.5 text-xs font-medium text-white/82 shadow-[0_14px_32px_rgba(15,23,42,0.22)] backdrop-blur-md">
+                  <div className="pointer-events-none absolute bottom-4 left-4 z-10 rounded-full border border-white/20 bg-black/48 px-3 py-1.5 text-xs font-medium text-white/82 shadow-[0_14px_32px_rgba(15,23,42,0.22)] backdrop-blur-md animate-in fade-in duration-500">
                     Hover and click face boxes to toggle selection
                   </div>
                 )}
@@ -1579,12 +1625,12 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               {isSwapping && (
                 <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-900/18 backdrop-blur-md animate-in fade-in duration-500">
                   {/* Progress Pill */}
-                  <div className="flex w-[320px] flex-col items-center gap-5 rounded-[32px] border border-white/25 bg-slate-900/86 p-6 shadow-[0_45px_120_rgba(0,0,0,0.6)] backdrop-blur-xl">
+                  <div className="flex w-[320px] flex-col items-center gap-6 rounded-[28px] border border-white/20 bg-slate-950/80 p-6 shadow-2xl backdrop-blur-xl animate-in fade-in zoom-in-95 duration-500">
                     <div className="flex items-center gap-4 self-stretch">
-                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]">
-                        <Loader2 className="h-6 w-6 animate-spin text-lime-400" />
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10">
+                        <Spinner className="h-6 w-6 text-white" />
                       </div>
-                      <div className="flex flex-col">
+                      <div className="flex flex-col gap-0.5">
                         <span className="text-sm font-black tracking-tight text-white">
                           {isResult
                             ? "Swap complete"
@@ -1600,27 +1646,28 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                                       ? "Applying lipsync"
                                       : "Processing swap..."}
                         </span>
-                        <span className="text-xs font-semibold text-slate-400">
+                        <span className="text-[11px] font-bold text-white/50 tracking-wide">
                           {isResult
-                            ? "Ready to download"
-                            : `${Math.round((swapStatus?.progress ?? 0) * 100)}% complete`}
+                            ? "READY TO DOWNLOAD"
+                            : `${Math.round((swapStatus?.progress ?? 0) * 100)}% COMPLETE`}
                         </span>
                       </div>
                     </div>
 
                     {!isResult && (
-                      <div className="h-2 w-full overflow-hidden rounded-full bg-white/10 shadow-[inset_0_1px_1px_rgba(0,0,0,0.2)]">
-                        <div
-                          className="h-full bg-lime-400 shadow-[0_0_15px_rgba(163,230,53,0.4)] transition-all duration-500 ease-out"
-                          style={{
-                            width: `${(swapStatus?.progress ?? 0) * 100}%`,
-                          }}
-                        />
+                      <div className="w-full">
+                        <Progress
+                          value={Math.round((swapStatus?.progress ?? 0) * 100)}
+                        >
+                          <ProgressTrack className="h-1.5 bg-white/10 border-none">
+                            <ProgressIndicator className="bg-white shadow-[0_0_15px_rgba(255,255,255,0.4)]" />
+                          </ProgressTrack>
+                        </Progress>
                       </div>
                     )}
 
                     {swapStatus?.message && !isResult && (
-                      <p className="w-full text-center text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                      <p className="w-full text-center text-[10px] font-bold uppercase tracking-[0.2em] text-white/30">
                         {swapStatus.message}
                       </p>
                     )}
@@ -1629,11 +1676,30 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               )}
               {isAnalyzingFaces && !isSwapping && !isResult && (
                 <div className="pointer-events-none absolute bottom-8 left-1/2 z-30 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-4 duration-500">
-                  <div className="flex items-center gap-3 rounded-2xl border border-lime-400/30 bg-slate-900/90 px-5 py-3 text-sm font-bold text-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-xl">
-                    <Spinner className="h-5 w-5 text-lime-400" />
+                  <div className="flex items-center gap-3 rounded-2xl border border-white/30 bg-slate-900/90 px-5 py-3 text-sm font-bold text-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+                    <Spinner className="h-5 w-5 text-white-400" />
                     <span className="tracking-tight">analyzing faces...</span>
                   </div>
                 </div>
+              )}
+
+              {resultJobId !== undefined && !isResult && !isSwapping && (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <a
+                        href={getDownloadUrl(resultJobId)}
+                        download={`swapped-${resultJobId}.mp4`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="absolute bottom-6 right-6 z-30 flex h-12 w-12 items-center justify-center rounded-full border border-white/20 bg-black/40 text-white shadow-xl backdrop-blur-md transition-all hover:bg-black/60 hover:scale-105 active:scale-95"
+                      >
+                        <Download className="h-5 w-5" />
+                      </a>
+                    }
+                  />
+                  <TooltipPopup>Download latest result</TooltipPopup>
+                </Tooltip>
               )}
             </div>
           </div>

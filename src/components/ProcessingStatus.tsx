@@ -1,8 +1,12 @@
 import { useEffect, useState } from "react";
-import { getStatus, getDownloadUrl } from "../lib/utils/api";
-import type { StatusResponse } from "../types";
-import { Download, AlertCircle, Loader2, RotateCcw, User } from "lucide-react";
-import { MediaPreview } from "./MediaPreview";
+import { getStatus, getDownloadUrl } from "@veed-hackathon/lib/utils/api";
+import type { StatusResponse } from "@veed-hackathon/types";
+import { Download, RotateCcw, User } from "lucide-react";
+import { MediaPreview } from "@veed-hackathon/components/MediaPreview";
+import { Alert, AlertTitle, AlertDescription } from "@veed-hackathon/components/ui/alert";
+import { Button } from "@veed-hackathon/components/ui/button";
+import { Progress, ProgressIndicator, ProgressTrack } from "@veed-hackathon/components/ui/progress";
+import { Spinner } from "@veed-hackathon/components/ui/spinner";
 
 interface ProcessingStatusProps {
   jobId: string;
@@ -69,16 +73,14 @@ export function ProcessingStatus({
 
   if (status.status === "failed") {
     return (
-      <div className="flex flex-col items-center gap-4 text-center">
-        <AlertCircle className="w-12 h-12 text-destructive" />
-        <p className="text-lg font-medium">Processing failed</p>
-        <p className="text-sm text-muted-foreground">{status.error}</p>
-        <button
-          className="py-2 px-6 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 transition-colors"
-          onClick={onRetry}
-        >
+      <div className="flex flex-col items-center gap-6 text-center max-w-md w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <Alert variant="error">
+          <AlertTitle>Processing failed</AlertTitle>
+          <AlertDescription>{status.error}</AlertDescription>
+        </Alert>
+        <Button onClick={onRetry} size="xl">
           Try Again
-        </button>
+        </Button>
       </div>
     );
   }
@@ -89,47 +91,47 @@ export function ProcessingStatus({
       status.output_filename ??
       (status.media_type === "image" ? "swapped.png" : "swapped.mp4");
     const mediaLabel = status.media_type === "image" ? "Image" : "Video";
+    
     return (
-      <div className="flex flex-col items-center gap-6 w-full max-w-lg">
+      <div className="flex flex-col items-center gap-8 w-full max-w-lg animate-in fade-in slide-in-from-bottom-4 duration-500">
         <MediaPreview
           src={downloadUrl}
           mediaType={status.media_type}
           alt={`Generated ${mediaLabel.toLowerCase()} preview`}
         />
+        
         {status.warnings && status.warnings.length > 0 && (
-          <div className="w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900">
-            <div className="mb-1 flex items-center gap-2 font-medium">
-              <AlertCircle className="h-4 w-4 text-amber-700" />
-              Reference generation warning
-            </div>
-            {status.warnings.map((warning) => (
-              <p key={warning}>{warning}</p>
-            ))}
-          </div>
+          <Alert variant="warning">
+            <AlertTitle>Reference generation warning</AlertTitle>
+            <AlertDescription>
+              {status.warnings.map((warning, i) => (
+                <p key={i}>{warning}</p>
+              ))}
+            </AlertDescription>
+          </Alert>
         )}
-        <div className="flex gap-3">
-          <a
-            href={downloadUrl}
-            download={downloadFilename}
-            className="py-3 px-8 bg-primary text-primary-foreground rounded-xl font-medium hover:bg-primary/90 transition-colors inline-flex items-center gap-2"
-          >
-            <Download className="w-4 h-4" />
-            Download {mediaLabel}
-          </a>
-          <button
-            className="py-3 px-6 border border-muted-foreground/25 text-foreground rounded-xl font-medium hover:bg-muted transition-colors inline-flex items-center gap-2"
-            onClick={onStartOver}
-          >
-            <RotateCcw className="w-4 h-4" />
+        
+        <div className="flex flex-wrap items-center justify-center gap-3">
+          <Button 
+            size="lg" 
+            className="min-w-40"
+            render={
+              <a href={downloadUrl} download={downloadFilename}>
+                <Download className="mr-2 h-4 w-4" />
+                Download {mediaLabel}
+              </a>
+            }
+          />
+          
+          <Button variant="outline" size="lg" onClick={onStartOver}>
+            <RotateCcw className="mr-2 h-4 w-4" />
             Start Over
-          </button>
-          <button
-            className="py-3 px-6 bg-lime-500 text-white rounded-xl font-medium hover:bg-lime-600 transition-colors inline-flex items-center gap-2 shadow-[0_12px_24px_rgba(132,204,22,0.2)]"
-            onClick={() => onEditResult(jobId)}
-          >
-            <User className="w-4 h-4" />
+          </Button>
+          
+          <Button variant="secondary" size="lg" onClick={() => onEditResult(jobId)}>
+            <User className="mr-2 h-4 w-4" />
             Edit Faces
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -141,52 +143,59 @@ export function ProcessingStatus({
       ? "Preparing selection"
       : status.phase === "swapping"
         ? "Swapping faces"
-      : status.phase === "compositing"
+        : status.phase === "compositing"
           ? "Compositing result"
-        : status.phase === "rendering"
+          : status.phase === "rendering"
             ? status.media_type === "image"
               ? "Rendering image"
               : "Rendering video"
             : status.phase === "lipsync"
               ? "Applying lipsync"
               : "Processing media";
+              
   const hasFrameProgress =
     typeof status.completed_frames === "number" &&
     typeof status.total_frames === "number" &&
     status.total_frames > 0;
+
   return (
-    <div className="flex flex-col items-center gap-6 w-full max-w-md">
-      <Loader2 className="w-10 h-10 animate-spin text-primary" />
-      <div className="space-y-1 text-center">
-        <p className="text-lg font-medium">{phaseLabel}</p>
-        <p className="text-sm text-muted-foreground">
-          {status.message ?? "Working through the selected media"}
-        </p>
-      </div>
-      {status.warnings && status.warnings.length > 0 && (
-        <div className="w-full rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-left text-sm text-amber-900">
-          <div className="mb-1 flex items-center gap-2 font-medium">
-            <AlertCircle className="h-4 w-4 text-amber-700" />
-            Reference generation warning
-          </div>
-          {status.warnings.map((warning) => (
-            <p key={warning}>{warning}</p>
-          ))}
-        </div>
-      )}
-      <div className="w-full bg-muted rounded-full h-3 overflow-hidden">
-        <div
-          className="h-full bg-primary rounded-full transition-all duration-500"
-          style={{ width: `${pct}%` }}
-        />
-      </div>
-      <div className="space-y-1 text-center">
-        <p className="text-sm text-muted-foreground">{pct}% complete</p>
-        {hasFrameProgress && (
-          <p className="text-xs text-muted-foreground">
-            {status.completed_frames}/{status.total_frames} frames
+    <div className="flex flex-col items-center gap-8 w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <div className="flex flex-col items-center gap-4 text-center">
+        <Spinner className="h-10 w-10 text-primary" />
+        <div className="space-y-1.5 mt-2">
+          <h3 className="text-xl font-black tracking-tight text-slate-950">{phaseLabel}</h3>
+          <p className="text-sm font-medium text-slate-500 max-w-xs mx-auto">
+            {status.message ?? "Working through the selected media"}
           </p>
-        )}
+        </div>
+      </div>
+
+      {status.warnings && status.warnings.length > 0 && (
+        <Alert variant="warning">
+          <AlertTitle>Reference generation warning</AlertTitle>
+          <AlertDescription>
+            {status.warnings.map((warning, i) => (
+              <p key={i}>{warning}</p>
+            ))}
+          </AlertDescription>
+        </Alert>
+      )}
+
+      <div className="w-full space-y-3">
+        <div className="flex items-center justify-between gap-4">
+          <span className="text-sm font-bold text-slate-900">{pct}% complete</span>
+          {hasFrameProgress && (
+            <span className="text-xs font-semibold tabular-nums text-slate-500">
+              {status.completed_frames}/{status.total_frames} frames
+            </span>
+          )}
+        </div>
+        
+        <Progress value={pct}>
+          <ProgressTrack>
+            <ProgressIndicator />
+          </ProgressTrack>
+        </Progress>
       </div>
     </div>
   );
