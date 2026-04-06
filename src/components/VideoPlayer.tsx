@@ -6,7 +6,7 @@ import React, {
   useState,
 } from "react";
 import demoVideoData from "../assets/insightface_video_data.json";
-import type { BoundingBox, FaceInfo } from "../types";
+import type { BoundingBox, FaceInfo, StatusResponse } from "../types";
 import { Button } from "./ui/button";
 import { PartnerStrip } from "./PartnerStrip";
 import { Slider } from "./ui/slider";
@@ -32,7 +32,12 @@ import {
   Sparkles,
   Wand2,
   ImagePlus,
+  Download,
+  Loader2,
+  RotateCcw,
 } from "lucide-react";
+import { Spinner } from "./ui/spinner";
+import { getDownloadUrl } from "../lib/utils/api";
 
 type PersonId = string;
 
@@ -230,127 +235,8 @@ const traceRoundedRect = (
   ctx.closePath();
 };
 
-const drawPersonOverlay = (
-  ctx: CanvasRenderingContext2D,
-  person: TrackingEntry,
-  layout: VideoLayout,
-  scaleX: number,
-  scaleY: number,
-  color: string,
-  options: {
-    canvasWidth: number;
-    isHovered: boolean;
-    isSelected: boolean;
-    isSelectionConstrained: boolean;
-  },
-): OverlayRegion => {
-  const [x1, y1, x2, y2] = person.bbox;
-  const bx = layout.x + x1 * scaleX;
-  const by = layout.y + y1 * scaleY;
-  const bw = (x2 - x1) * scaleX;
-  const bh = (y2 - y1) * scaleY;
-  const radius = Math.max(10, Math.min(22, Math.min(bw, bh) * 0.16));
-  const isDimmed = options.isSelectionConstrained && !options.isSelected;
-  const strokeAlpha = options.isSelected ? 1 : options.isHovered ? 0.84 : 0.42;
-  const fillAlpha = options.isSelected ? 0.12 : options.isHovered ? 0.16 : 0.06;
-  const glowAlpha = options.isHovered ? 0.5 : options.isSelected ? 0.26 : 0;
-  const lineWidth = options.isHovered ? 4 : options.isSelected ? 3.25 : 2.5;
-  const hitPadding = Math.max(8, Math.min(18, Math.min(bw, bh) * 0.24));
-
-  ctx.save();
-  if (glowAlpha > 0) {
-    ctx.shadowBlur = options.isHovered ? 28 : 18;
-    ctx.shadowColor = colorToRgba(color, glowAlpha);
-  }
-
-  ctx.fillStyle = colorToRgba(color, fillAlpha);
-  traceRoundedRect(ctx, bx, by, bw, bh, radius);
-  ctx.fill();
-
-  ctx.strokeStyle = colorToRgba(color, strokeAlpha);
-  ctx.lineWidth = lineWidth;
-  traceRoundedRect(ctx, bx, by, bw, bh, radius);
-  ctx.stroke();
-  ctx.restore();
-
-  const labelText = options.isHovered
-    ? `${person.label} (${(person.det_score * 100).toFixed(1)}%)`
-    : person.label;
-  ctx.save();
-  ctx.font = "700 14px Inter, system-ui, sans-serif";
-  const labelWidth = Math.ceil(ctx.measureText(labelText).width) + 22;
-  const labelHeight = 28;
-  const labelX = Math.min(
-    Math.max(layout.x + 8, bx),
-    Math.max(layout.x + 8, options.canvasWidth - labelWidth - 8),
-  );
-  const labelY = Math.max(layout.y + 8, by - labelHeight - 10);
-
-  ctx.fillStyle = colorToRgba(color, isDimmed ? 0.72 : 0.96);
-  traceRoundedRect(ctx, labelX, labelY, labelWidth, labelHeight, 14);
-  ctx.fill();
-
-  if (options.isHovered) {
-    ctx.strokeStyle = "rgba(255,255,255,0.7)";
-    ctx.lineWidth = 1.25;
-    traceRoundedRect(ctx, labelX, labelY, labelWidth, labelHeight, 14);
-    ctx.stroke();
-  }
-
-  ctx.fillStyle = "rgba(255,255,255,0.98)";
-  ctx.textBaseline = "middle";
-  ctx.fillText(labelText, labelX + 11, labelY + labelHeight / 2 + 0.5);
-
-  if (options.isHovered) {
-    ctx.font = "600 11px Inter, system-ui, sans-serif";
-    const statusText =
-      options.isSelectionConstrained && options.isSelected
-        ? "Selected"
-        : "Click to select";
-    const statusWidth = Math.ceil(ctx.measureText(statusText).width) + 18;
-    const statusHeight = 22;
-    const statusX = Math.min(
-      Math.max(layout.x + 8, labelX),
-      Math.max(layout.x + 8, options.canvasWidth - statusWidth - 8),
-    );
-    const statusY = Math.min(
-      Math.max(layout.y + 8, labelY + labelHeight + 6),
-      by + bh + 10,
-    );
-
-    ctx.fillStyle = "rgba(15,23,42,0.76)";
-    traceRoundedRect(ctx, statusX, statusY, statusWidth, statusHeight, 11);
-    ctx.fill();
-    ctx.fillStyle = "rgba(255,255,255,0.92)";
-    ctx.fillText(statusText, statusX + 9, statusY + statusHeight / 2 + 0.5);
-  }
-  ctx.restore();
-
-  return {
-    area: Math.max(1, bw * bh),
-    height: bh,
-    hitHeight: bh + hitPadding * 2,
-    hitWidth: bw + hitPadding * 2,
-    hitX: bx - hitPadding,
-    hitY: by - hitPadding,
-    id: person.id,
-    width: bw,
-    x: bx,
-    y: by,
-  };
-};
-
 const frameArea = ([x1, y1, x2, y2]: BoundingBox) =>
   Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
-
-const getTrackingEntriesForFrame = (
-  trackingData: TrackingDataset,
-  frameIndex: number,
-): TrackingEntry[] =>
-  trackingData.frames[frameIndex.toString()] ??
-  trackingData.frames[(frameIndex + 1).toString()] ??
-  trackingData.frames[(frameIndex - 1).toString()] ??
-  [];
 
 const getOverlayRegionAtPoint = (
   regions: OverlayRegion[],
@@ -668,12 +554,17 @@ interface VideoPlayerProps {
   useLiveTracking?: boolean;
   error?: string | null;
   isSwapping?: boolean;
+  isAnalyzingFaces?: boolean;
+  isResult?: boolean;
+  swapStatus?: StatusResponse | null;
+  resultJobId?: string;
   onSwap?: (
     selectedIds: string[],
     frameWindow: { startFrame: number; endFrame: number },
     swapOptions?: { referenceFile?: File; stylePrompt?: string },
   ) => void;
   onBack?: () => void;
+  onEditAgain?: () => void;
 }
 
 export const VideoPlayer: React.FC<VideoPlayerProps> = ({
@@ -683,8 +574,13 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
   useLiveTracking = false,
   error = null,
   isSwapping = false,
+  isAnalyzingFaces = false,
+  isResult = false,
+  swapStatus = null,
+  resultJobId = "",
   onSwap,
   onBack,
+  onEditAgain,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -730,13 +626,17 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     [faces],
   );
 
-  const trackingData = useMemo(
-    () =>
-      useLiveTracking
-        ? buildTrackingDataFromFaces(faces, fps)
-        : normalizeDemoTrackingData(),
-    [faces, fps, useLiveTracking],
-  );
+  const trackingData = useMemo(() => {
+    if (isResult) return { video_metadata: { fps: 30 }, frames: {} };
+
+    // If we have actual detected faces (during or after analysis), use them.
+    if (faces && faces.length > 0) {
+      return buildTrackingDataFromFaces(faces, fps);
+    }
+
+    // Fallback to demo data for new projects or before analysis starts.
+    return normalizeDemoTrackingData();
+  }, [faces, fps, isResult]);
   const clipDuration = Math.max(0, endTime - startTime);
   const relativeCurrentTime = Math.max(0, currentTime - startTime);
   const selectionDuration = Math.max(0.01, tempSelection[1] - tempSelection[0]);
@@ -1094,22 +994,38 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     };
   }, []);
 
+  const lastVideoSrcRef = useRef(videoSrc);
   useEffect(() => {
-    setSelectionMode(false);
-    setFaceControlMode(false);
-    setSelectedPersonIds([]);
-    setAppliedSelectedIds([]);
-    setHasFaceSelectionConfigured(false);
-    setFacePanelPosition({ x: 24, y: 118 });
-    setKeyframes([]);
-    setCurrentTime(0);
-    setDuration(0);
-    setStartTime(0);
-    setEndTime(0);
-    setTempSelection([0, 0]);
-    pointerPositionRef.current = null;
-    overlayRegionsRef.current = [];
-    syncHoveredPerson(null);
+    const videoSrcChanged = lastVideoSrcRef.current !== videoSrc;
+    lastVideoSrcRef.current = videoSrc;
+
+    if (videoSrcChanged) {
+      setSelectionMode(false);
+      setFaceControlMode(false);
+      setSelectedPersonIds([]);
+      setAppliedSelectedIds([]);
+      setHasFaceSelectionConfigured(false);
+      setFacePanelPosition({ x: 24, y: 118 });
+      setKeyframes([]);
+      setCurrentTime(0);
+      setDuration(0);
+      setStartTime(0);
+      setEndTime(0);
+      setTempSelection([0, 0]);
+      pointerPositionRef.current = null;
+      overlayRegionsRef.current = [];
+      syncHoveredPerson(null);
+    } else {
+      // Faces arrived or tracking toggled for SAME video
+      // Just ensure we have valid bounds
+      if (videoRef.current && duration === 0) {
+        const d = videoRef.current.duration;
+        if (d > 0) {
+          setDuration(d);
+          setEndTime(d);
+        }
+      }
+    }
   }, [videoSrc, faces, fps, syncHoveredPerson, useLiveTracking]);
 
   // Setup canvas drawing loop
@@ -1118,16 +1034,18 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
 
-    let animationFrameId: number;
-
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    const activeSelectedPersonIds = faceControlMode
-      ? selectedPersonIds
-      : appliedSelectedIds;
-    const activeSelectedSet = new Set(activeSelectedPersonIds);
+
+    let animationFrameId: number;
+    const drawFaces = !isResult && !isAnalyzingFaces;
 
     const renderFrame = () => {
+      if (!ctx || !video || video.ended) {
+        animationFrameId = requestAnimationFrame(renderFrame);
+        return;
+      }
+
       const layout = calculateVideoLayout(
         canvas.width,
         canvas.height,
@@ -1135,66 +1053,80 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         video.videoHeight,
       );
 
-      if (layout.width > 0) {
-        drawVideoFrame(ctx, video, canvas.width, canvas.height, layout);
+      drawVideoFrame(ctx, video, canvas.width, canvas.height, layout);
 
-        const currentFrame = Math.round(
-          video.currentTime * Math.max(trackingData.video_metadata.fps, 1),
+      if (drawFaces) {
+        const frameIdx = Math.floor(
+          video.currentTime * trackingData.video_metadata.fps,
         );
-        const frameData = getTrackingEntriesForFrame(
-          trackingData,
-          currentFrame,
-        );
-        const overlayRegions: OverlayRegion[] = [];
+        const entries = trackingData.frames[frameIdx.toString()] || [];
+        const regions: OverlayRegion[] = [];
 
-        if (frameData.length > 0) {
-          const scaleX = layout.width / Math.max(video.videoWidth, 1);
-          const scaleY = layout.height / Math.max(video.videoHeight, 1);
-          frameData.forEach((person) => {
-            const isSelected =
-              !hasFaceSelectionConfigured || activeSelectedSet.has(person.id);
-            overlayRegions.push(
-              drawPersonOverlay(
-                ctx,
-                person,
-                layout,
-                scaleX,
-                scaleY,
-                getPersonColor(person.id),
-                {
-                  canvasWidth: canvas.width,
-                  isHovered:
-                    canInteractWithStageFaces &&
-                    hoveredPersonIdRef.current === person.id,
-                  isSelected,
-                  isSelectionConstrained: hasFaceSelectionConfigured,
-                },
-              ),
-            );
+        for (const entry of entries) {
+          const isSelected = selectedPersonIds.includes(entry.id);
+          const isApplied = appliedSelectedIds.includes(entry.id);
+          const isHovered = entry.id === hoveredPersonIdRef.current;
+          const color = getPersonColor(entry.id);
+
+          const [x1, y1, x2, y2] = entry.bbox;
+          const scaleX = layout.width / video.videoWidth;
+          const scaleY = layout.height / video.videoHeight;
+
+          const vx = x1 * scaleX + layout.x;
+          const vy = y1 * scaleY + layout.y;
+          const vw = (x2 - x1) * scaleX;
+          const vh = (y2 - y1) * scaleY;
+
+          regions.push({
+            id: entry.id,
+            x: vx,
+            y: vy,
+            width: vw,
+            height: vh,
+            hitX: vx,
+            hitY: vy,
+            hitWidth: vw,
+            hitHeight: vh,
+            area: vw * vh,
           });
+
+          // Draw box
+          ctx.lineWidth = isHovered ? 4 : 2;
+          ctx.strokeStyle = color;
+          traceRoundedRect(ctx, vx, vy, vw, vh, 8);
+          ctx.stroke();
+
+          if (isApplied || isSelected || isHovered) {
+            ctx.fillStyle = colorToRgba(color, isApplied ? 0.2 : 0.1);
+            ctx.fill();
+          }
+
+          if (isSelected || isApplied || isHovered) {
+            const label = isApplied ? `Ref: ${entry.label}` : entry.label;
+            ctx.font = "bold 12px sans-serif";
+            const metrics = ctx.measureText(label);
+            const labelW = metrics.width + 16;
+            ctx.fillStyle = color;
+            traceRoundedRect(ctx, vx, vy - 24, labelW, 20, 4);
+            ctx.fill();
+            ctx.fillStyle = "white";
+            ctx.fillText(label, vx + 8, vy - 10);
+          }
         }
+        overlayRegionsRef.current = regions;
+      } else {
+        overlayRegionsRef.current = [];
+      }
 
-        overlayRegionsRef.current = overlayRegions;
-
-        if (!canInteractWithStageFaces) {
-          if (hoveredPersonIdRef.current !== null) {
-            syncHoveredPerson(null);
-          }
-          pointerPositionRef.current = null;
-        } else if (pointerPositionRef.current) {
-          const hoveredRegion = getOverlayRegionAtPoint(
-            overlayRegions,
-            pointerPositionRef.current.x,
-            pointerPositionRef.current.y,
-          );
-          if ((hoveredRegion?.id ?? null) !== hoveredPersonIdRef.current) {
-            syncHoveredPerson(hoveredRegion?.id ?? null);
-          }
-        } else if (
-          overlayRegions.length === 0 &&
-          hoveredPersonIdRef.current !== null
-        ) {
-          syncHoveredPerson(null);
+      // Interaction check
+      if (canInteractWithStageFaces && drawFaces) {
+        const hoveredRegion = getOverlayRegionAtPoint(
+          overlayRegionsRef.current,
+          pointerPositionRef.current?.x ?? -1,
+          pointerPositionRef.current?.y ?? -1,
+        );
+        if ((hoveredRegion?.id ?? null) !== hoveredPersonIdRef.current) {
+          syncHoveredPerson(hoveredRegion?.id ?? null);
         }
       }
 
@@ -1215,6 +1147,8 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
     getPersonColor,
     syncHoveredPerson,
     trackingData,
+    isResult,
+    isAnalyzingFaces,
   ]);
 
   // Sync canvas size with parent
@@ -1293,6 +1227,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         stylePrompt: stylePrompt.trim() || undefined,
       },
     );
+    setFaceControlMode(false);
     setShowSwapOptions(false);
   };
 
@@ -1621,14 +1556,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
               <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.05),transparent_18%,transparent_82%,rgba(255,255,255,0.05))]" />
               <div className="pointer-events-none absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black/24 to-transparent" />
               <div className="pointer-events-none absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black/44 to-transparent" />
-              {!selectionMode && visiblePersonMetaData.length > 0 && (
-                <div className="pointer-events-none absolute bottom-4 left-4 z-10 rounded-full border border-white/20 bg-black/48 px-3 py-1.5 text-xs font-medium text-white/82 shadow-[0_14px_32px_rgba(15,23,42,0.22)] backdrop-blur-md">
-                  Hover and click face boxes to toggle selection
-                </div>
-              )}
+              {!selectionMode &&
+                !isResult &&
+                visiblePersonMetaData.length > 0 && (
+                  <div className="pointer-events-none absolute bottom-4 left-4 z-10 rounded-full border border-white/20 bg-black/48 px-3 py-1.5 text-xs font-medium text-white/82 shadow-[0_14px_32px_rgba(15,23,42,0.22)] backdrop-blur-md">
+                    Hover and click face boxes to toggle selection
+                  </div>
+                )}
               <canvas
                 ref={canvasRef}
-                className="block h-full w-full"
+                className={`block h-full w-full ${isSwapping ? "blur-[20px]" : ""}`}
                 onClick={handleCanvasClick}
                 onPointerLeave={handleCanvasPointerLeave}
                 onPointerMove={handleCanvasPointerMove}
@@ -1639,6 +1576,65 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       : "default",
                 }}
               />
+              {isSwapping && (
+                <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-slate-900/18 backdrop-blur-md animate-in fade-in duration-500">
+                  {/* Progress Pill */}
+                  <div className="flex w-[320px] flex-col items-center gap-5 rounded-[32px] border border-white/25 bg-slate-900/86 p-6 shadow-[0_45px_120_rgba(0,0,0,0.6)] backdrop-blur-xl">
+                    <div className="flex items-center gap-4 self-stretch">
+                      <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white/10 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]">
+                        <Loader2 className="h-6 w-6 animate-spin text-lime-400" />
+                      </div>
+                      <div className="flex flex-col">
+                        <span className="text-sm font-black tracking-tight text-white">
+                          {isResult
+                            ? "Swap complete"
+                            : swapStatus?.phase === "extracting_clips"
+                              ? "Preparing selection"
+                              : swapStatus?.phase === "swapping"
+                                ? "Swapping faces"
+                                : swapStatus?.phase === "compositing"
+                                  ? "Compositing result"
+                                  : swapStatus?.phase === "rendering"
+                                    ? "Rendering final video"
+                                    : swapStatus?.phase === "lipsync"
+                                      ? "Applying lipsync"
+                                      : "Processing swap..."}
+                        </span>
+                        <span className="text-xs font-semibold text-slate-400">
+                          {isResult
+                            ? "Ready to download"
+                            : `${Math.round((swapStatus?.progress ?? 0) * 100)}% complete`}
+                        </span>
+                      </div>
+                    </div>
+
+                    {!isResult && (
+                      <div className="h-2 w-full overflow-hidden rounded-full bg-white/10 shadow-[inset_0_1px_1px_rgba(0,0,0,0.2)]">
+                        <div
+                          className="h-full bg-lime-400 shadow-[0_0_15px_rgba(163,230,53,0.4)] transition-all duration-500 ease-out"
+                          style={{
+                            width: `${(swapStatus?.progress ?? 0) * 100}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+
+                    {swapStatus?.message && !isResult && (
+                      <p className="w-full text-center text-[10px] uppercase tracking-[0.2em] text-slate-500">
+                        {swapStatus.message}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+              {isAnalyzingFaces && !isSwapping && !isResult && (
+                <div className="pointer-events-none absolute bottom-8 left-1/2 z-30 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                  <div className="flex items-center gap-3 rounded-2xl border border-lime-400/30 bg-slate-900/90 px-5 py-3 text-sm font-bold text-white shadow-[0_20px_50px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+                    <Spinner className="h-5 w-5 text-lime-400" />
+                    <span className="tracking-tight">analyzing faces...</span>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -1932,7 +1928,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
         )}
 
         <div
-          className={`mx-auto w-full shrink-0 px-2 transition-all duration-300 ${
+          className={`relative z-40 mx-auto w-full shrink-0 px-2 transition-all duration-300 ${
             selectionMode ? "max-w-6xl pt-2" : "mt-auto max-w-5xl"
           }`}
         >
@@ -2040,7 +2036,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                   </div>
 
                   <div className="flex items-center justify-between w-full px-2">
-                    <ToolbarGroup className="flex items-center gap-3">
+                    <ToolbarGroup className="flex min-w-0 flex-1 items-center gap-4">
                       {onBack && (
                         <Button
                           variant="ghost"
@@ -2055,15 +2051,16 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         <TooltipTrigger
                           render={
                             <Button
-                              size="icon"
                               variant="ghost"
+                              size="sm"
+                              disabled={isSwapping}
                               onClick={togglePlay}
-                              className="h-10 w-10 text-slate-700 hover:bg-slate-100"
+                              className="h-10 w-10 rounded-2xl border border-slate-200 bg-white p-0 text-slate-800 shadow-sm transition-all hover:bg-slate-50 active:scale-95"
                             >
                               {playing ? (
-                                <Pause className="w-5 h-5 fill-current" />
+                                <Pause className="h-5 w-5 fill-current" />
                               ) : (
-                                <Play className="w-5 h-5 fill-current ml-0.5" />
+                                <Play className="h-5 w-5 fill-current translate-x-0.5" />
                               )}
                             </Button>
                           }
@@ -2080,7 +2077,7 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                       </div>
                     </ToolbarGroup>
 
-                    <ToolbarGroup className="flex items-center gap-6">
+                    <ToolbarGroup className="flex items-center gap-4">
                       <ToggleGroup
                         value={[playbackRate.toString()]}
                         onValueChange={changeSpeed}
@@ -2106,66 +2103,112 @@ export const VideoPlayer: React.FC<VideoPlayerProps> = ({
                         </Toggle>
                       </ToggleGroup>
 
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <Button
-                              size="sm"
-                              onClick={enterSelectionMode}
-                              className="h-9 border border-slate-200 bg-white px-4 font-semibold text-slate-900 shadow-sm transition-all hover:bg-slate-50 active:scale-95"
-                            >
-                              <Scissors className="w-4 h-4 mr-2" />
-                              Timeframe
-                            </Button>
-                          }
-                        />
-                        <TooltipPopup>Edit timeframe</TooltipPopup>
-                      </Tooltip>
+                      {isResult ? (
+                        <div className="flex items-center gap-3">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className=""
+                            onClick={onEditAgain}
+                          >
+                            <RotateCcw className="mr-2" />
+                            <span>Edit</span>
+                          </Button>
 
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <Button
-                              size="sm"
-                              onClick={enterFaceControlMode}
-                              className={`h-9 border border-slate-200 bg-white px-4 font-semibold text-slate-900 shadow-sm transition-all hover:bg-slate-50 active:scale-95 ${
-                                faceControlMode ? "ring-2 ring-lime-200" : ""
-                              }`}
-                            >
-                              <ScanFace className="w-4 h-4 mr-2" />
-                              Faces
+                          <a
+                            className="flex items-center"
+                            href={
+                              resultJobId
+                                ? getDownloadUrl(resultJobId)
+                                : videoSrc
+                            }
+                            download={
+                              resultJobId
+                                ? `swapped-${resultJobId}.mp4`
+                                : "swapped-video.mp4"
+                            }
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Button size="sm" className=" ">
+                              <Download className="mr-2" />
+                              <span>Download</span>
                             </Button>
-                          }
-                        />
-                        <TooltipPopup>Control Faces</TooltipPopup>
-                      </Tooltip>
+                          </a>
+                        </div>
+                      ) : (
+                        <>
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <Button
+                                  size="sm"
+                                  variant="secondary"
+                                  onClick={enterSelectionMode}
+                                  disabled={isAnalyzingFaces || isSwapping}
+                                  className={`h-9 border border-slate-200 bg-white px-4 font-semibold text-slate-900 shadow-sm transition-all hover:bg-slate-50 active:scale-95 ${
+                                    isAnalyzingFaces
+                                      ? "opacity-50 cursor-not-allowed"
+                                      : ""
+                                  }`}
+                                >
+                                  <Scissors className="w-4 h-4 mr-2" />
+                                  Timeframe
+                                </Button>
+                              }
+                            />
+                            <TooltipPopup>Edit timeframe</TooltipPopup>
+                          </Tooltip>
 
-                      <Tooltip>
-                        <TooltipTrigger
-                          render={
-                            <Button
-                              size="sm"
-                              onClick={handleFaceSwap}
-                              disabled={isSwapping}
-                              className="h-9 bg-slate-950 px-4 font-semibold text-white shadow-sm transition-all hover:bg-slate-900 active:scale-95 disabled:bg-slate-300"
-                            >
-                              <SmilePlus className="w-4 h-4 mr-2" />
-                              {onSwap
-                                ? appliedFaceCount > 0
-                                  ? `Swap ${appliedFaceCount} Face${appliedFaceCount === 1 ? "" : "s"}`
-                                  : "Swap Selected"
-                                : "Export Selection"}
-                            </Button>
-                          }
-                        />
-                        <TooltipPopup>
-                          {isSwapping
-                            ? "Starting swap..."
-                            : onSwap
-                              ? "Open Faces to choose people, then start the backend swap"
-                              : "Export the selected face tracks"}
-                        </TooltipPopup>
-                      </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <Button
+                                  variant="secondary"
+                                  size="sm"
+                                  onClick={enterFaceControlMode}
+                                  disabled={isAnalyzingFaces || isSwapping}
+                                  className={`h-9 border border-slate-200 bg-white px-4 font-semibold text-slate-900 shadow-sm transition-all  active:scale-95 ${
+                                    faceControlMode
+                                      ? "ring-2 ring-lime-200"
+                                      : ""
+                                  } ${isAnalyzingFaces ? "opacity-50 cursor-not-allowed" : ""}`}
+                                >
+                                  <ScanFace className="w-4 h-4 mr-2" />
+                                  Faces
+                                </Button>
+                              }
+                            />
+                            <TooltipPopup>Control Faces</TooltipPopup>
+                          </Tooltip>
+
+                          <Tooltip>
+                            <TooltipTrigger
+                              render={
+                                <Button
+                                  size="sm"
+                                  onClick={handleFaceSwap}
+                                  disabled={isSwapping || isAnalyzingFaces}
+                                >
+                                  <SmilePlus className="w-4 h-4 mr-2" />
+                                  {onSwap
+                                    ? appliedFaceCount > 0
+                                      ? `Swap ${appliedFaceCount} Face${appliedFaceCount === 1 ? "" : "s"}`
+                                      : "Swap Selected"
+                                    : "Export Selection"}
+                                </Button>
+                              }
+                            />
+                            <TooltipPopup>
+                              {isSwapping
+                                ? "Starting swap..."
+                                : onSwap
+                                  ? "Open Faces to choose people, then start the backend swap"
+                                  : "Export the selected face tracks"}
+                            </TooltipPopup>
+                          </Tooltip>
+                        </>
+                      )}
                     </ToolbarGroup>
                   </div>
                 </div>

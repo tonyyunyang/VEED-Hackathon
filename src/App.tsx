@@ -1,12 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import {
-  Routes,
-  Route,
-  useNavigate,
-  useLocation,
-  useParams,
-  Navigate,
-} from "react-router-dom";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import "./App.css";
 import "./index.css";
 import type { AppStep, FaceInfo } from "./types";
@@ -17,14 +10,15 @@ import {
   uploadReference,
   reAnalyze,
   getDownloadUrl,
+  getStatus,
 } from "./lib/utils/api";
+import type { StatusResponse } from "./types";
 import { VideoUploader } from "./components/VideoUploader";
-import { ProcessingStatus } from "./components/ProcessingStatus";
 import { Gallery } from "./components/Gallery";
 import { VideoPlayer } from "./components/VideoPlayer";
 import { ImageEditor } from "./components/ImageEditor";
 import { PartnerStrip } from "./components/PartnerStrip";
-import { Loader2, ArrowLeft, AlertCircle } from "lucide-react";
+import { ArrowLeft, AlertCircle } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -36,48 +30,19 @@ import {
 } from "./components/ui/alert-dialog";
 import { Button } from "./components/ui/button";
 
-function demoMediaIdFromUrl(src: string): string | null {
-  const fileName = src.split("/").pop()?.split("?")[0];
-  if (!fileName?.endsWith(".mp4")) {
-    return null;
-  }
-  const demoId = fileName.slice(0, -4).trim().toLowerCase();
-  if (!demoId) {
-    return null;
-  }
-  return `demo_${demoId.replace(/-/g, "_")}`;
+/**
+ * Ensures a promise takes at least minMs to resolve.
+ */
+async function withMinDelay<T>(promise: Promise<T>, minMs: number): Promise<T> {
+  const [result] = await Promise.all([
+    promise,
+    new Promise((resolve) => setTimeout(resolve, minMs)),
+  ]);
+  return result;
 }
 
-function ProcessingPage({
-  onRetry,
-  onStartOver,
-  onEditResult,
-  onError,
-}: {
-  onRetry: () => void;
-  onStartOver: () => void;
-  onEditResult: (jobId: string) => void;
-  onError: (msg: string) => void;
-}) {
-  const { jobId } = useParams<{ jobId: string }>();
-
-  if (!jobId) {
-    return <Navigate to="/" replace />;
-  }
-
-  return (
-    <div className="w-full flex flex-col items-center py-10">
-      <div className="w-full max-w-2xl rounded-[32px] border border-white/70 bg-white/70 p-10 shadow-[0_30px_90px_rgba(15,23,42,0.10)] backdrop-blur-xl flex flex-col items-center">
-        <ProcessingStatus
-          jobId={jobId}
-          onRetry={onRetry}
-          onStartOver={onStartOver}
-          onEditResult={onEditResult}
-          onError={onError}
-        />
-      </div>
-    </div>
-  );
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error ? error.message : fallback;
 }
 
 function App() {
@@ -86,9 +51,13 @@ function App() {
   const [selectedVideoSrc, setSelectedVideoSrc] = useState<string>("");
   const [faces, setFaces] = useState<FaceInfo[]>([]);
   const [detectionFps, setDetectionFps] = useState(0);
-  const [jobId, setJobId] = useState("");
+  const [swapJobId, setSwapJobId] = useState("");
+  const [resultJobId, setResultJobId] = useState("");
+  const [swapStatus, setSwapStatus] = useState<StatusResponse | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isSwapping, setIsSwapping] = useState(false);
+  const [isAnalyzingFaces, setIsAnalyzingFaces] = useState(false);
+  const [isResult, setIsResult] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [userVideos, setUserVideos] = useState<
     { name: string; url: string; file: File }[]
@@ -115,6 +84,92 @@ function App() {
     window.scrollTo(0, 0);
   }, [location.pathname]);
 
+  // Polling for swap status
+  useEffect(() => {
+    if (!isSwapping || !swapJobId) return;
+
+    let active = true;
+    const poll = async () => {
+      try {
+        const s = await getStatus(swapJobId);
+        if (!active) return;
+        setSwapStatus(s);
+
+        if (s.status === "completed") {
+          const downloadUrl = getDownloadUrl(swapJobId);
+          setSelectedVideoSrc(downloadUrl);
+          setIsResult(true);
+          setResultJobId(swapJobId);
+          setIsSwapping(false);
+          setSwapStatus(null);
+          setSwapJobId("");
+        } else if (s.status === "failed") {
+          setError(s.error || "Swap processing failed");
+          setIsSwapping(false);
+          setSwapStatus(null);
+          setSwapJobId("");
+        }
+      } catch {
+        // Transient error, keep polling
+      }
+    };
+
+    void poll();
+    const interval = setInterval(poll, 1000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [isSwapping, swapJobId]);
+
+  // Unified Analysis Workflow
+  const runAnalysisWorkflow = useCallback(
+    async ({
+      src,
+      mediaIdProvider,
+      onErrorStep = "gallery",
+    }: {
+      src: string;
+      mediaIdProvider: () => Promise<string>;
+      onErrorStep?: AppStep;
+    }) => {
+      if (uploadInFlightRef.current) return;
+      uploadInFlightRef.current = true;
+      setError(null);
+      setFaces([]);
+      setDetectionFps(0);
+      setSwapJobId("");
+      setResultJobId("");
+      setSwapStatus(null);
+      setIsResult(false);
+      setSelectedVideoSrc(src);
+      setIsAnalyzingFaces(true);
+      setStep("player");
+      if (location.pathname !== "/editor") {
+        navigate("/editor");
+      }
+
+      try {
+        const mid = await mediaIdProvider();
+        setVideoId(mid);
+        const detection = await withMinDelay(detectFaces(mid), 800);
+        setDetectionFps(detection.fps);
+        setFaces(detection.faces);
+      } catch (e) {
+        setError(errorMessage(e, "Analysis failed"));
+        setStep(onErrorStep);
+        if (location.pathname !== "/") {
+          navigate("/");
+        }
+      } finally {
+        uploadInFlightRef.current = false;
+        setIsUploading(false);
+        setIsAnalyzingFaces(false);
+      }
+    },
+    [location.pathname, navigate],
+  );
+
   // Sync route and step state
   useEffect(() => {
     if (location.pathname === "/" && step !== "gallery" && step !== "upload") {
@@ -122,40 +177,22 @@ function App() {
     } else if (
       location.pathname.startsWith("/editor") &&
       !selectedVideoSrc &&
-      step !== "detecting"
+      step !== "detecting" &&
+      step !== "player"
     ) {
       navigate("/", { replace: true });
     }
   }, [location.pathname, step, selectedVideoSrc, navigate]);
 
   const handleUpload = async (file: File) => {
-    if (uploadInFlightRef.current) return;
-    uploadInFlightRef.current = true;
-    setIsUploading(true);
-    setError(null);
-    setFaces([]);
-    setDetectionFps(0);
-    setJobId("");
-    clearUploadedPreview();
     const url = URL.createObjectURL(file);
     uploadedPreviewUrlRef.current = url;
-    setSelectedVideoSrc(url);
-    setStep("detecting");
-    navigate("/editor");
-    try {
-      const vid = await uploadVideo(file);
-      setVideoId(vid);
-      const detection = await detectFaces(vid);
-      setDetectionFps(detection.fps);
-      setFaces(detection.faces);
-      setStep("player");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Upload failed");
-      setStep("upload");
-    } finally {
-      uploadInFlightRef.current = false;
-      setIsUploading(false);
-    }
+    setIsUploading(true);
+    await runAnalysisWorkflow({
+      src: url,
+      mediaIdProvider: () => uploadVideo(file),
+      onErrorStep: "upload",
+    });
   };
 
   const handleSwap = async (
@@ -165,6 +202,13 @@ function App() {
   ) => {
     setIsSwapping(true);
     setError(null);
+    setResultJobId("");
+    setSwapStatus({
+      status: "processing",
+      progress: 0,
+      error: null,
+      warnings: null,
+    });
     try {
       if (swapOptions?.referenceFile) {
         await uploadReference(videoId, swapOptions.referenceFile);
@@ -173,12 +217,11 @@ function App() {
         ...frameWindow,
         stylePrompt: swapOptions?.stylePrompt,
       });
-      setJobId(jid);
-      navigate(`/processing/${jid}`);
+      setSwapJobId(jid);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Swap failed");
-    } finally {
+      setError(errorMessage(e, "Swap failed"));
       setIsSwapping(false);
+      setSwapStatus(null);
     }
   };
 
@@ -189,50 +232,31 @@ function App() {
     setSelectedVideoSrc("");
     setFaces([]);
     setDetectionFps(0);
-    setJobId("");
+    setSwapJobId("");
+    setResultJobId("");
+    setSwapStatus(null);
+    setIsResult(false);
     setError(null);
     navigate("/");
   };
 
   const handleOpenGalleryVideo = async (src: string | File) => {
-    try {
-      setStep("detecting");
-      navigate("/editor");
-      if (typeof src === "string") {
-        const cachedMediaId = demoMediaIdFromUrl(src);
-        if (cachedMediaId) {
-          clearUploadedPreview();
-          setError(null);
-          setFaces([]);
-          setDetectionFps(0);
-          setJobId("");
-          setVideoId(cachedMediaId);
-          setSelectedVideoSrc(src);
-          try {
-            const detection = await detectFaces(cachedMediaId);
-            setDetectionFps(detection.fps);
-            setFaces(detection.faces);
-            setStep("player");
-            return;
-          } catch {
-            setVideoId("");
-          }
-        }
-
-        const response = await fetch(src);
-        const blob = await response.blob();
-        const filename =
-          src.split("/").pop()?.split("?")[0] || "demo-video.mp4";
-        const file = new File([blob], filename, {
-          type: blob.type || "video/mp4",
-        });
-        await handleUpload(file);
-        return;
-      }
-
+    if (src instanceof File) {
       await handleUpload(src);
+      return;
+    }
+
+    try {
+      const response = await fetch(src);
+      const blob = await response.blob();
+      const filename =
+        src.split("/").pop()?.split("?")[0] || "project-video.mp4";
+      const file = new File([blob], filename, {
+        type: blob.type || "video/mp4",
+      });
+      await handleUpload(file);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to load demo video");
+      setError(errorMessage(e, "Failed to load project video"));
       setStep("gallery");
     }
   };
@@ -249,26 +273,14 @@ function App() {
 
   const handleEditResult = async (completedJobId: string) => {
     setIsUploading(true);
-    setError(null);
-    setFaces([]);
-    setDetectionFps(0);
-    setJobId("");
-    try {
-      setStep("detecting");
-      navigate("/editor");
-      const { media_id } = await reAnalyze(completedJobId);
-      setVideoId(media_id);
-      setSelectedVideoSrc(getDownloadUrl(completedJobId));
-      const detection = await detectFaces(media_id);
-      setDetectionFps(detection.fps);
-      setFaces(detection.faces);
-      setStep("player");
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Re-analysis failed");
-      setStep("gallery");
-    } finally {
-      setIsUploading(false);
-    }
+    await runAnalysisWorkflow({
+      src: getDownloadUrl(completedJobId),
+      mediaIdProvider: async () => {
+        const { media_id } = await reAnalyze(completedJobId);
+        return media_id;
+      },
+      onErrorStep: "gallery",
+    });
   };
 
   return (
@@ -289,8 +301,8 @@ function App() {
               </h1>
               <p className="mt-4 max-w-2xl text-base leading-7 text-slate-600">
                 Upload a short clip, inspect tracked faces, trim the exact
-                range, and launch the swap from one polished workspace instead
-                of a pile of disconnected steps.
+                range, and launch the swap from one polished workspace. No more
+                disconnected steps.
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
                 <div className="rounded-full border border-lime-200 bg-lime-50/90 px-4 py-2 text-sm font-semibold text-lime-900 shadow-[0_12px_24px_rgba(157,255,116,0.18)]">
@@ -315,8 +327,7 @@ function App() {
                   One clean flow
                 </div>
                 <p className="mt-2 text-sm leading-6 text-slate-600">
-                  Selection, preview, render state, and download all stay inside
-                  a single product surface.
+                  Selection, preview, render state, and download.
                 </p>
               </div>
             </div>
@@ -337,7 +348,11 @@ function App() {
               </AlertDialogDescription>
             </AlertDialogHeader>
             <AlertDialogFooter className="sm:justify-center">
-              <AlertDialogClose render={<Button variant="outline" className="min-w-32 rounded-xl" />}>
+              <AlertDialogClose
+                render={
+                  <Button variant="outline" className="min-w-32 rounded-xl" />
+                }
+              >
                 Dismiss
               </AlertDialogClose>
             </AlertDialogFooter>
@@ -383,22 +398,7 @@ function App() {
             path="/editor"
             element={
               <>
-                {step === "detecting" && (
-                  <div className="rounded-[32px] border border-white/70 bg-white/72 px-10 py-10 text-center shadow-[0_30px_90px_rgba(15,23,42,0.08)] backdrop-blur-2xl">
-                    <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full border border-lime-200 bg-lime-50 text-slate-900 shadow-[0_18px_36px_rgba(157,255,116,0.18)]">
-                      <Loader2 className="h-7 w-7 animate-spin" />
-                    </div>
-                    <p className="text-lg font-semibold text-slate-900">
-                      Analyzing faces...
-                    </p>
-                    <p className="mt-2 text-sm text-slate-600">
-                      Uploading the clip, extracting frames, and preparing the
-                      review editor.
-                    </p>
-                  </div>
-                )}
-
-                {step === "player" && (
+                {(step === "player" || isResult) && (
                   <div className="fixed inset-0 z-50 h-screen w-full">
                     <VideoPlayer
                       videoSrc={selectedVideoSrc}
@@ -407,31 +407,21 @@ function App() {
                       useLiveTracking={Boolean(videoId)}
                       error={error}
                       isSwapping={isSwapping}
+                      isAnalyzingFaces={isAnalyzingFaces}
+                      isResult={isResult}
+                      swapStatus={swapStatus}
+                      resultJobId={resultJobId}
                       onSwap={videoId ? handleSwap : undefined}
                       onBack={handleStartOver}
+                      onEditAgain={
+                        isResult && resultJobId
+                          ? () => handleEditResult(resultJobId)
+                          : undefined
+                      }
                     />
                   </div>
                 )}
               </>
-            }
-          />
-
-          <Route
-            path="/processing/:jobId"
-            element={
-              <ProcessingPage
-                onRetry={() => {
-                  setStep("player");
-                  navigate("/editor");
-                }}
-                onStartOver={handleStartOver}
-                onEditResult={handleEditResult}
-                onError={(msg) => {
-                  setError(msg);
-                  setStep("player");
-                  navigate("/editor");
-                }}
-              />
             }
           />
 

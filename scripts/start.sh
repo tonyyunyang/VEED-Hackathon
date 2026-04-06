@@ -78,9 +78,9 @@ VIRTUAL_ENV="${FACEFUSION_DIR}/.venv" uv pip install \
     -r "${FACEFUSION_DIR}/requirements.txt" \
     fastapi uvicorn python-multipart
 
-# Frontend (npm)
-echo -e "${CYAN}  [frontend] npm install${RESET}"
-cd "${ROOT_DIR}" && npm install --silent
+# Frontend (pnpm)
+echo -e "${CYAN}  [frontend] pnpm install${RESET}"
+cd "${ROOT_DIR}" && pnpm install --silent
 
 echo -e "${BOLD}${GREEN}Dependencies ready.${RESET}"
 echo ""
